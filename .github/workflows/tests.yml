@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-self-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Offline self-test (no network, stdlib only)
+        run: python -m unittest discover -s tests -v
+      - name: Scripts run end to end
+        run: |
+          python scripts/kv_cache.py --preset qwen3.8-27b --weights-gb 16.5
+          python scripts/kv_cache.py --preset gemma4-26b-a4b
+          python scripts/kv_cache.py --config tests/fixtures/qwen3.8-27b-config.json
+          python scripts/test_tools.py --provider anthropic --model claude-sonnet-5

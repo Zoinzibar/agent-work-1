@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Send one trivial tool call to a planner route. Dry-run unless --send.
 
-updated-workflow.md §5: a marketing page that says "tools" is not enough.
+docs/workflow.md §5: a marketing page that says "tools" is not enough.
 This script asks the route to call `add`, with arguments 2 and 3. It does not
 browse, execute code, or read secrets. The API key is read from the
 environment and never printed.
@@ -13,6 +13,10 @@ Usage:
       --model anthropic/claude-opus-5-5 --send
 
 Keys: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY.
+
+Exit status: 0 = add(a=2, b=3) came back as a structured tool call (or dry run),
+1 = the route answered but did not make that call, 2 = the probe did not
+complete (missing key, auth/quota/5xx, transport error).
 OpenRouter and Nous Portal are --provider openai with --base-url set.
 """
 import argparse
@@ -85,6 +89,56 @@ def gemini_request(model, base_url):
     return url, body, "GEMINI_API_KEY", "x-goog-api-key"
 
 
+def _args_ok(args):
+    """True if the tool arguments are a=2, b=3 (dict or JSON string).
+
+    Numbers must be JSON numbers equal to 2 and 3; 2.0 is accepted because some
+    providers (Gemini's protobuf Struct) serialise integers as doubles. Strings
+    ("2") and booleans are argument-fidelity failures, not passes.
+    """
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return False
+    if not isinstance(args, dict):
+        return False
+    def num_is(v, want):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and v == want
+
+    return num_is(args.get("a"), 2) and num_is(args.get("b"), 3)
+
+
+def find_tool_call(provider, parsed):
+    """Return (called, args_ok) for an `add` call in a parsed response body.
+
+    Walks the provider's documented response shape instead of substring-matching
+    the JSON dump (the old check matched any body containing "add" and "tool_use",
+    e.g. prose that mentions the tool). Pure function so it can be unit-tested.
+    """
+    calls = []
+    if not isinstance(parsed, dict):
+        return False, False
+    if provider == "anthropic":
+        for block in parsed.get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                calls.append((block.get("name"), block.get("input")))
+    elif provider == "openai":
+        for choice in parsed.get("choices") or []:
+            msg = (choice or {}).get("message") or {}
+            for tc in msg.get("tool_calls") or []:
+                fn = (tc or {}).get("function") or {}
+                calls.append((fn.get("name"), fn.get("arguments")))
+    elif provider == "gemini":
+        for cand in parsed.get("candidates") or []:
+            for part in ((cand or {}).get("content") or {}).get("parts") or []:
+                fc = (part or {}).get("functionCall")
+                if fc:
+                    calls.append((fc.get("name"), fc.get("args")))
+    adds = [args for name, args in calls if name == TOOL["name"]]
+    return bool(adds), any(_args_ok(a) for a in adds)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="One tool-call probe. Dry-run by default.")
     p.add_argument("--provider", required=True, choices=["anthropic", "openai", "gemini"])
@@ -139,6 +193,9 @@ def main(argv=None):
         raw = e.read().decode(errors="replace")
         print(f"\nHTTP {e.code}")
         print(raw[:4000])
+        if e.code in (401, 403, 429) or e.code >= 500:
+            print("\nAuth, quota or server error. The probe did not complete; this says nothing about tools.")
+            return 2
         if e.code in (400, 404, 422) and "tool" in raw.lower():
             print("\nRoute rejected tools. Do not use this id as the planner until that changes.")
         return 1
@@ -153,12 +210,14 @@ def main(argv=None):
         print("\nNon-JSON body. Cannot tell whether a tool call was returned.")
         return 1
 
-    text = json.dumps(parsed)
-    called = "add" in text and ("tool_use" in text or "tool_calls" in text or "functionCall" in text)
+    called, args_ok = find_tool_call(args.provider, parsed)
     print(json.dumps(parsed, indent=2)[:4000])
-    if called:
-        print("\nTool call present in the response. This route accepts tools for this probe.")
+    if called and args_ok:
+        print("\nadd(a=2, b=3) tool call present. This route accepts tools for this probe.")
         return 0
+    if called:
+        print("\nadd() was called, but not with a=2, b=3. Tool calling works; argument fidelity does not.")
+        return 1
     print("\nHTTP success, but no add() tool call found in the body.")
     print("The route may accept the schema and still have declined to call it. Inspect the body.")
     return 1

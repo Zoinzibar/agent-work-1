@@ -1,4 +1,4 @@
-"""Offline checks for the scripts that updated-workflow.md §12 tells you to run.
+"""Offline checks for the scripts that docs/workflow.md §10 tells you to run.
 
 No network. These pin the arithmetic that §4.1 quotes and the HTTP-status
 classification that the existence checker relies on. Run with:
@@ -8,12 +8,12 @@ classification that the existence checker relies on. Run with:
 import importlib.util
 import io
 import pathlib
-import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+FIXTURES = pathlib.Path(__file__).resolve().parent / "fixtures"
 
 
 def load(name):
@@ -30,8 +30,15 @@ test_tools = load("test_tools")
 GiB = 1024 ** 3
 
 
+def run_kv(argv):
+    out = io.StringIO()
+    with redirect_stdout(out):
+        rc = kv.main(argv)
+    return rc, out.getvalue()
+
+
 class KVCacheArithmetic(unittest.TestCase):
-    """Numbers quoted in updated-workflow.md §4.1."""
+    """Numbers quoted in docs/workflow.md §4.1."""
 
     def test_qwen38_full_attention_is_exactly_64kib_per_token(self):
         per_tok = kv.kv_bytes_per_token(16, 4, 256, 2.0)
@@ -71,16 +78,77 @@ class KVCacheArithmetic(unittest.TestCase):
     def test_every_preset_prints_without_error(self):
         for name in kv.PRESETS:
             with self.subTest(preset=name):
-                out = io.StringIO()
-                argv = sys.argv
-                try:
-                    sys.argv = ["kv_cache.py", "--preset", name]
-                    with redirect_stdout(out):
-                        rc = kv.main()
-                finally:
-                    sys.argv = argv
-                self.assertIn(rc, (0, None))
-                self.assertIn("GiB", out.getvalue())
+                rc, text = run_kv(["--preset", name])
+                self.assertEqual(rc, 0)
+                self.assertIn("GiB", text)
+
+    def test_qwen_linear_state_uses_qkv_conv_channels(self):
+        # Gated DeltaNet convolves Q, K and V: 2 * 16*128 + 48*128.
+        state = kv.PRESETS["qwen3.8-27b"]["linear_state"]
+        self.assertEqual(state["conv_channels"], 10240)
+        recurrent, conv = kv.linear_state_bytes(state)
+        self.assertEqual(recurrent, 48 * 48 * 128 * 128 * 4)
+        self.assertAlmostEqual((recurrent + conv) / GiB, 0.1479, places=4)
+
+    def test_fit_line_matches_section_4_1_table(self):
+        # §4.1: UD-Q4_K_M 16.5 GB + 4.00 GiB KV + ~0.15 GiB state = 19.5 GiB, ~4.5 headroom.
+        rc, text = run_kv(["--preset", "qwen3.8-27b", "--weights-gb", "16.5"])
+        self.assertEqual(rc, 0)
+        self.assertIn("weights 16.5 GB decimal = 15.37 GiB", text)
+        self.assertIn("sum = 19.51 GiB of 24.0 GiB", text)
+
+    def test_fit_line_flags_llama70b(self):
+        rc, text = run_kv(["--preset", "llama-3.3-70b", "--weights-gb", "19.0"])
+        self.assertEqual(rc, 0)
+        self.assertIn("DOES NOT FIT", text)
+
+
+class KVCacheFromConfig(unittest.TestCase):
+    """--config on the real Qwen3.8-27B geometry must agree with the preset."""
+
+    def test_hybrid_config_counts_only_full_attention_layers(self):
+        rc, text = run_kv(["--config", str(FIXTURES / "qwen3.8-27b-config.json")])
+        self.assertEqual(rc, 0)
+        # Previously this counted all 64 layers and printed 16 GiB.
+        self.assertIn("at 65536 tokens: 4294967296 bytes = 4.0000 GiB", text)
+        self.assertIn("combined: 158859264 bytes", text)
+
+    def test_all_linear_config_has_zero_growing_cache(self):
+        # Review of PR #8: zero full_attention layers used to fall back to num_hidden_layers,
+        # counting every linear layer in the growing cache AND in the fixed state.
+        import json
+        import tempfile
+        cfg = json.loads((FIXTURES / "qwen3.8-27b-config.json").read_text())
+        text = cfg["text_config"]
+        text["layer_types"] = ["linear_attention"] * 4
+        text["num_hidden_layers"] = 4
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(cfg, f)
+        try:
+            rc, out = run_kv(["--config", f.name])
+        finally:
+            pathlib.Path(f.name).unlink()
+        self.assertEqual(rc, 0)
+        self.assertIn("counts only the 0 full_attention layers", out)
+        self.assertIn("growing KV cache is 0 bytes", out)
+        self.assertNotIn("bytes/token", out)
+        self.assertIn("assumed recurrent: 4 layers", out)
+
+    def test_full_attn_only_override_still_wins(self):
+        rc, text = run_kv(["--config", str(FIXTURES / "qwen3.8-27b-config.json"), "--full-attn-only", "8"])
+        self.assertEqual(rc, 0)
+        self.assertIn("2 * 8 layers", text)
+
+    def test_config_missing_geometry_is_a_usage_error(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            f.write("{}")
+        try:
+            with self.assertRaises(SystemExit) as cm, redirect_stderr(io.StringIO()):
+                kv.main(["--config", f.name])
+            self.assertEqual(cm.exception.code, 2)
+        finally:
+            pathlib.Path(f.name).unlink()
 
 
 class ExistenceClassifier(unittest.TestCase):
@@ -154,6 +222,74 @@ class ToolProbeDryRun(unittest.TestCase):
                 self.assertIn(model, text)
                 self.assertIn("Dry run", text)
                 self.assertNotIn("Bearer ", text)  # never print a key or auth header value
+
+
+class ToolCallDetection(unittest.TestCase):
+    """Parse the provider's response shape; do not substring-match the body."""
+
+    def test_anthropic_tool_use(self):
+        body = {"content": [{"type": "tool_use", "name": "add", "input": {"a": 2, "b": 3}}], "stop_reason": "tool_use"}
+        self.assertEqual(test_tools.find_tool_call("anthropic", body), (True, True))
+
+    def test_anthropic_prose_mentioning_tool_is_not_a_call(self):
+        # The old substring check passed this: it contains "add" and "tool_use".
+        body = {"content": [{"type": "text", "text": "I would add 2 and 3 via tool_use."}], "stop_reason": "end_turn"}
+        self.assertEqual(test_tools.find_tool_call("anthropic", body), (False, False))
+
+    def test_openai_tool_calls_with_string_arguments(self):
+        body = {"choices": [{"message": {"tool_calls": [
+            {"type": "function", "function": {"name": "add", "arguments": "{\"a\": 2, \"b\": 3}"}}]}}]}
+        self.assertEqual(test_tools.find_tool_call("openai", body), (True, True))
+
+    def test_openai_wrong_arguments(self):
+        body = {"choices": [{"message": {"tool_calls": [
+            {"type": "function", "function": {"name": "add", "arguments": "{\"a\": 5, \"b\": 3}"}}]}}]}
+        self.assertEqual(test_tools.find_tool_call("openai", body), (True, False))
+
+    def test_openai_null_tool_calls(self):
+        body = {"choices": [{"message": {"content": "5", "tool_calls": None}}]}
+        self.assertEqual(test_tools.find_tool_call("openai", body), (False, False))
+
+    def test_gemini_function_call(self):
+        body = {"candidates": [{"content": {"parts": [{"functionCall": {"name": "add", "args": {"a": 2, "b": 3}}}]}}]}
+        self.assertEqual(test_tools.find_tool_call("gemini", body), (True, True))
+
+    def test_string_or_bool_arguments_are_not_fidelity(self):
+        for args in ({"a": "2", "b": "3"}, {"a": True, "b": 3}):
+            with self.subTest(args=args):
+                body = {"content": [{"type": "tool_use", "name": "add", "input": args}]}
+                self.assertEqual(test_tools.find_tool_call("anthropic", body), (True, False))
+
+    def test_gemini_double_encoded_integers_pass(self):
+        body = {"candidates": [{"content": {"parts": [{"functionCall": {"name": "add", "args": {"a": 2.0, "b": 3.0}}}]}}]}
+        self.assertEqual(test_tools.find_tool_call("gemini", body), (True, True))
+
+    def test_other_tool_name_is_not_add(self):
+        body = {"content": [{"type": "tool_use", "name": "address_lookup", "input": {}}]}
+        self.assertEqual(test_tools.find_tool_call("anthropic", body), (False, False))
+
+    def test_send_without_key_does_not_send(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}), \
+                mock.patch.object(test_tools.urllib.request, "urlopen") as urlopen, \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            rc = test_tools.main(["--provider", "openai", "--model", "gpt-6-sol", "--send"])
+        self.assertEqual(rc, 2)
+        urlopen.assert_not_called()
+
+    def test_auth_error_is_incomplete_not_a_tools_verdict(self):
+        import os
+        import urllib.error
+        from unittest import mock
+        err = urllib.error.HTTPError("https://x", 401, "Unauthorized", {}, io.BytesIO(b'{"error":"invalid key, tool"}'))
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}), \
+                mock.patch.object(test_tools.urllib.request, "urlopen", side_effect=err), \
+                redirect_stdout(io.StringIO()) as out:
+            rc = test_tools.main(["--provider", "openai", "--model", "gpt-6-sol", "--send"])
+        self.assertEqual(rc, 2)
+        self.assertNotIn("Route rejected tools", out.getvalue())
+        self.assertNotIn("sk-test", out.getvalue())
 
 
 if __name__ == "__main__":

@@ -1,48 +1,44 @@
-# agent-work-1
+# Hermes Agent on Arch Linux + RTX 4090: web search and deep research
 
-## Hermes Agent / RTX 4090 research — claim verification
+A setup guide for running [Hermes Agent](https://github.com/NousResearch/hermes-agent) with
+built-in web search and a composed deep-research loop. It targets **one 24 GB RTX 4090 on Arch
+Linux**, with a local model for cheap steps and a cloud planner for multi-hop reasoning.
+Every load-bearing claim is labelled Verified, Derived, Unverified or Judgment and tied to a
+source.
 
-- [`initial-agent-research.md`](initial-agent-research.md) — the initial research brief as received
-  (reproduced verbatim, with a **warning banner** and `†` navigation markers; it contains known-false
-  model advice).
-- [`claim-verification-analysis.md`](claim-verification-analysis.md) — independent verification of every
-  checkable claim against primary sources (Hermes Agent docs, Nous Research blogs and Hugging Face model
-  cards, `Seed-OSS-36B-Base` config, Qwen model cards, OpenRouter/Artificial Analysis data), with a
-  scorecard, corrections, KV-cache arithmetic for the 64K context floor on a 24 GB card, a sourced
-  reference list, and a corrected model/hardware stack.
-- [`updated-workflow.md`](updated-workflow.md) — the workflow to follow, **revision 2026-09-27**.
-  It applies the corrections from the analysis and the open items from
-  [`CRITICAL_REVIEW.md`](CRITICAL_REVIEW.md) (PR #4), after a primary-source pass. It is **not**
-  an absolute "safe to act on" claim. Run its §12 checklist before downloading or subscribing.
-  [`provenance/2026-09-27.md`](provenance/2026-09-27.md) lists what was fetched and what was not.
+**Last verified: 2026-09-27.** Model IDs and prices move fast; run the checklist before acting.
 
-**Scorecard:** 33 scored claims → **17 verified as stated**, **13 verified with material qualification**,
-**3 incorrect** (plus 1 advisory row, not scored).
+## Read
 
-**The three errors — two model picks and one provider conflation:**
-1. "Qwen3-Coder 32B Instruct" — the brief's headline local pick — **does not exist**, and its 71.4%
-   SWE-bench figure belongs to another model.
-2. The Llama 3.3 70B IQ2_XXS fallback **cannot hold a 64K KV cache**: 20 GiB of cache alone, on top of
-   ~21–23 GB of weights, on a 24 GB card.
-3. **xAI and Parallel are different providers**, and xAI's search results are LLM-generated rather than
-   index-backed.
+- **[`docs/workflow.md`](docs/workflow.md)**: the guide. Start with §0 (summary) and finish with
+  §10 (checklist before you download or subscribe).
+- [`docs/sources.md`](docs/sources.md): Hugging Face SHA pins, sources, unverified leads, and a
+  list of **known-false claims** not to repeat.
+- [`AGENTS.md`](AGENTS.md): maintenance rules for anyone (human or agent) updating the repo.
 
-The framework half held up in the 2026-09-26 scorecard (11 of 16 claims verified as stated), and the
-hybrid local + cloud architecture still survives. The 2026-09-27 revision keeps Qwen3.8-27B as the
-default local *weight* only after confirming the Hub repo and `config.json` — and it withdraws the
-AA Index "52 vs 38" figure, which was not on the model card. Planner IDs are named vendor model IDs,
-not "frontier-adjacent".
+## At a glance
 
-### Scripts
+| Layer | Pick |
+| --- | --- |
+| Local model | `Qwen/Qwen3.8-27B`, Unsloth `UD-Q4_K_M`: ≈19.5 GiB with a 64K fp16 cache, before buffers |
+| Planner | `claude-opus-5-5` / `claude-sonnet-5` / `gpt-6-sol` / `gemini-3.8-flash`, **after** a live tool-call test |
+| Web search | Keyed Firecrawl, or SearXNG plus a keyed extractor; keyless ring only as failover |
+| Won't fit on one 4090 at 64K | Llama 3.3 70B, Hermes 4.3 36B; Hermes 4 405B is not a planner |
 
-Small, dependency-free (`python3` stdlib only). The workflow's §12 checklist tells you when to run them.
+## Scripts
 
-| Script | What it does | Network |
-| --- | --- | --- |
-| `scripts/kv_cache.py --preset <name>` | Reproduces the KV-cache rows in `updated-workflow.md` §4.1 from model geometry (`--config config.json` for your own). | none |
-| `scripts/check_model_existence.py` | Asks the Hugging Face API whether each recommended id still exists and whether its revision SHA moved off the 2026-09-27 pin. Exit 0 = pass, 1 = mismatch, 2 = a lookup did not complete. Reads `HF_TOKEN` if set. | Hub API |
-| `scripts/test_tools.py --provider … --model …` | Builds one minimal tool-call request for a named planner id; dry-run unless `--send`. | vendor API, only with `--send` |
-| `python -m unittest discover -s tests` | Offline self-test: the §4.1 numbers, the Hub status classification, and the probe's dry-run contract. | none |
+Python 3.9+ standard library only; no install needed.
 
-> ⏳ **Re-checked 2026-09-27, not frozen.** Before downloading anything, run
-> [`updated-workflow.md`](updated-workflow.md) §12. Model IDs and prices move faster than the KV formula.
+```bash
+python scripts/kv_cache.py --preset qwen3.8-27b --weights-gb 16.5   # KV cache + fit vs 24 GiB
+python scripts/kv_cache.py --config path/to/config.json             # any model, hybrid-aware
+python scripts/check_model_existence.py                             # Hub ids exist + SHAs match pins (network)
+python scripts/test_tools.py --provider anthropic --model claude-sonnet-5          # dry run
+python scripts/test_tools.py --provider anthropic --model claude-sonnet-5 --send   # live, needs API key
+python -m unittest discover -s tests                                # offline self-test (also runs in CI)
+```
+
+| Script | Exit codes |
+| --- | --- |
+| `check_model_existence.py` | 0 all match · 1 mismatch (missing id, SHA moved, known-false id exists) · 2 lookup incomplete |
+| `test_tools.py --send` | 0 structured `add(2, 3)` tool call · 1 no such call · 2 probe didn't complete (key, auth, quota, 5xx, network) |
