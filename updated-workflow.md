@@ -1,414 +1,608 @@
 # Updated workflow: native Web Search & Deep Research on Hermes Agent
-## Arch Linux / single RTX 4090 (24 GB) — corrected edition
+## Arch Linux / single RTX 4090 (24 GB) — revision 2026-09-27
 
-> **Lineage:** this is the workflow proposed in
-> [`initial-agent-research.md`](initial-agent-research.md), rewritten with every correction from
-> [`claim-verification-analysis.md`](claim-verification-analysis.md) applied. Each section cites the graded claims (`F1`–`F16`, `M1`–`M18`) and
-> findings (analysis §3–§7) it depends on, so every step can be traced back to a verified source.
-> **Reference convention:** sections of the analysis are always cited with the prefix "analysis §N";
-> a bare `§N` refers to this file.
-
-> ## ⚠️ CRITICAL REVIEW NOTICE — 2026-09-27
-> **This file previously claimed "safe to act on" — that claim is removed in this branch.**
-> A second-order review ([`CRITICAL_REVIEW.md`](CRITICAL_REVIEW.md)) found 14 structural concerns that survive the v2 corrections:
-> - **Framework existence risk:** `hermes-agent.nousresearch.com` and `NousResearch/hermes-agent` are cited as primary sources for F1–F6, but no HTTP 200 + hash + archive is provided. If the docs domain is hallucinated, verification is circular.
-> - **Model picks still volatile / possibly hallucinated:** Qwen3.8-27B (2026-08-14) and Gemma 4 26B-A4B are sourced from SEO blogs (`kingy.ai`, `codersera.com`, `atomic.chat`), not HF `config.json`. Same failure mode that produced Qwen3-Coder 32B. See `scripts/check_model_existence.py`.
-> - **KV arithmetic hides assumptions:** DeltaNet layers assumed 0 KV for Qwen3.8-27B; Gemma 4 row is "estimated, not derived" yet used for fit verdict. See `scripts/kv_cache.py`.
-> - **Overconfidence:** "safe to act on" + no threat model for `execute_code`, MCP browser automation, or prompt injection via `web_extract`.
-> - **Vague planner tier:** "frontier-adjacent" is unfalsifiable; no concrete model + tool-call test.
-> - **Missing Arch Linux steps, cost model, license table, failure modes.**
-> **Action:** Read `CRITICAL_REVIEW.md` before acting. Run `python scripts/check_model_existence.py` and `python scripts/kv_cache.py --config <path>` first.
-
-> ## ⏳ Freshness line — read this before acting
-> Claims verified **2026-09-26**. Second-order review **2026-09-27** downgrades safety claim.
-> Split by volatility, not by section number:
-> - **Durable:** the framework facts (§1, §2) *conditional on docs existence*, the KV arithmetic and fit verdicts (§4.1, §4.3) *conditional on geometry assumptions*, and the engine guidance (§4.4).
-> - **Volatile — assume a ~6-week half-life:** the model shortlist (§4.2), the planner pick (§5, step 2),
->   all throughput figures, and the 160M-token data point in §3. The local tier already moved once during
->   verification (Qwen3.8-27B superseded Qwen3.6-27B on 2026-08-14) and may have moved again by 2026-09-27.
-> - **In between:** the provider/memory guidance in §5 (steps 3–4) and the traceability structure of §6.
+> **Lineage.** [`initial-agent-research.md`](initial-agent-research.md) proposed the workflow.
+> [`claim-verification-analysis.md`](claim-verification-analysis.md) graded it (2026-09-26).
+> [PR #4](https://github.com/Zoinzibar/agent-work-1/pull/4) / [`CRITICAL_REVIEW.md`](CRITICAL_REVIEW.md)
+> refused to treat that correction as ground truth. **This file is the proposed workflow that
+> applies that review**, after a primary-source pass on 2026-09-27. It replaces the review's
+> disclaimer-on-top-of-the-old-draft. It is not a new scorecard of all 33 original claims.
 >
-> **Run §7's checklist + `CRITICAL_REVIEW.md` §Summary checklist before downloading or subscribing to anything — it maintains exactly the volatile parts.**
+> **This file is not "safe to act on."** It is corrected against the sources listed in §11,
+> fetched 2026-09-27, with assumptions stated. Model IDs, prices, and catalog fit still move.
+> Run §12 before downloading or subscribing. If `hermes-agent.nousresearch.com` does not
+> resolve, stop — do not debug a CLI from this document alone.
+
+**How to read a label.**
+
+| Label | Means |
+| --- | --- |
+| **Re-checked** | A primary page was fetched for this revision on 2026-09-27. |
+| **Derived** | Computed here from a fetched `config.json` or a published price. Assumptions are named. |
+| **Carried** | Taken from the 2026-09-26 analysis and **not** re-fetched. Use it as a lead, not as a fresh measurement. |
+| **Judgment** | A role assignment (which tier does what). Not a benchmark ranking. |
+| **Withdrawn** | A number in the previous edition that this revision does not carry. |
+
+A bare `§N` is this file. Analysis sections are "analysis §N".
 
 ---
 
-## 0. TL;DR — what changed at a glance
+## 0. TL;DR
 
-The brief's **architecture** was right and survives verification: run web search and the cheap,
-high-frequency parts of research loops locally, and offload multi-hop planning/synthesis to a bursty
-cloud model. Its **errors were concentrated in model selection — two of the three ❌ are model picks;
-the third is a provider conflation** (down in the table). Every load-bearing item is replaced or
-corrected here:
+The architecture still holds: do cheap, frequent research steps locally; send multi-hop planning
+and citation-quality synthesis to a cloud model whose tool calling you have actually tested.
+What changed in this revision is the evidence under the specific names.
 
-| Layer | Initial brief said | This workflow says |
+| Layer | Previous corrected edition | This revision |
 | --- | --- | --- |
-| Local model (extraction, tool calls, subagent legs) | "Qwen3-Coder 32B Q4_K_M" †2 | **❌ does not exist** (analysis M9) → **Qwen3.8-27B Q4_K_M**; Gemma 4 26B-A4B when throughput matters most |
-| "Bigger" local fallback | Llama 3.3 70B IQ2_XXS †3 | **❌ removed entirely** — 20 GiB of KV cache at the mandatory 64K window plus ~21–23 GB of weights cannot fit in 24 GB of VRAM **fully on-GPU**, at any quantisation (M14). RAM spill can technically run it, slowly (§4.4), but there is no *usable* 70B-class path on one 24 GB card |
-| Cloud "planner brain" | Hermes 4 405B via OpenRouter †5 | **❌ weak agentic panel** (analysis §3.4) → a **current (2026) frontier/frontier-adjacent model with verified tool calling** |
-| Zero-setup web search | Keyless ring as the default plan | **⚠️ repositioned** — the ring is a documented last-resort rescue path; run a keyed provider (or self-hosted SearXNG + keyed extractor) and let the ring be automatic failover (F5, analysis §4) |
-| "Parallel/xAI routing" †1 | One backend routing via Grok | **❌ conflation** — Parallel and xAI are separate; xAI results are LLM-generated, so never cite them blind (F8) |
-| Embedding sidecar config | `auxiliary: session_search` block | **⚠️ version-sensitive** — plan for memory-provider plugins + a local embedding endpoint; verify the auxiliary slot on your build (M16) |
-| Sequencing | Start local-only; add the planner when quality plateaus | **⚠️ inverted priority** — validate the planner path *early*, it's the most likely failure point (M18, analysis §6) |
+| Does Hermes Agent exist? | Cited its own docs. PR #4 called that circular. | **Re-checked.** Public repo [`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent) and the docs index both responded on 2026-09-27. Still: if they 404 on your machine, stop. |
+| Local weight | Qwen3.8-27B as "default local pick", AA Index 52 vs 38, sourced from SEO blogs | **Exists** — [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B), SHA `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`, last modified 2026-08-14. **AA 52 vs 38 is withdrawn** (not on the model card; not re-read from Artificial Analysis). Role is a **judgment**, not a ranking. |
+| Throughput alternative | Gemma 4 26B-A4B, "✅ ~17.5 GiB at 32K" | **Exists** — [`google/gemma-4-26B-A4B-it`](https://huggingface.co/google/gemma-4-26B-A4B-it). The old fit verdict is **withdrawn**. KV is now a derived range (§4.1), not a measured fit. Speed figures are not carried. |
+| 70B fallback | Removed. Correctly. | Still removed. 20 GiB of fp16 KV at 64K is carried geometry; it cannot sit beside 70B weights in 24 GiB. |
+| Planner | "A current frontier or frontier-adjacent model" | **Named IDs** from vendor docs fetched today (§5). Not Hermes 4 405B. Confirm the route accepts `tools` with `scripts/test_tools.py` before you build on it. |
+| Search ladder | Keyed primary, keyless ring as failover, xAI separate | Still the plan. The live backend table is wider than the 2026-09-26 writeup (§2.2). |
+| Safety claim | PR #4 removed "safe to act on" and added a draft §5.1 | Kept removed. Security section rewritten against the code-execution and security docs, which are more specific than the review assumed. |
 
-> `†N` refers to the navigation markers inserted into
-> [`initial-agent-research.md`](initial-agent-research.md) at each flagged passage (legend at the top of
-> that file) — they let you jump from a row above to the exact brief text being replaced. They carry no
-> meaning within this file alone.
-
----
-
-## 1. What you're actually configuring
-
-*Verified as stated — no changes from the brief.*
-
-- **Hermes Agent** is Nous Research's open-source agent framework. It runs in the terminal, a native
-  desktop app, messaging platforms, and IDEs (via ACP), in the same category as Claude Code / Codex /
-  OpenClaw. [F1 ✅]
-- It works with **any LLM provider** — Nous Portal, OpenRouter, OpenAI, Anthropic, Google, or any
-  OpenAI-compatible endpoint — including local models via managed llama.cpp, Ollama, vLLM, SGLang,
-  LocalAI. [F2 ✅]
-- **The hard constraint: 64,000 tokens of context, minimum.** Models below the floor are **rejected at
-  startup** — a hard failure, not a warning (upstream issue #53347). This single requirement drives all
-  the VRAM arithmetic in §4. [F3 ✅]
-- **No lock-in:** switch providers at any time with `hermes model`. [M15 ✅]
+Sequencing ("validate the planner early") stays in §5. It is **advisory**, the same status as
+analysis M18. It is not a scored correction. It is in the TL;DR because it changes what you do
+first, not because it was graded.
 
 ---
 
-## 2. Workflow 1 — native Web Search
+## 1. What you are configuring
 
-Web search ships **built in** — no custom skill needed. [F4 ✅]
+**Re-checked.** Hermes Agent is Nous Research's open-source agent. The docs index describes it
+as a terminal-native agent with a desktop app, a messaging gateway, and an ACP surface, working
+with Nous Portal, OpenRouter, OpenAI, Anthropic, Google, or any OpenAI-compatible endpoint,
+including local models. Repo license on the GitHub landing page: MIT.
 
-### 2.1 Setup (two commands cover every path)
+Point-in-time pin, not a version to install blindly: commit `2f14d5e` was HEAD when the repo
+page was fetched on 2026-09-27. Pin the commit you actually install. HEAD will have moved.
 
 ```bash
-hermes tools            # → Web Search & Extract → pick a provider; the wizard stores the key/URL
-hermes setup --portal   # paid Nous Portal path: Tool Gateway enables all gateway tools, no per-tool keys
+# Official installer. Read the script before piping it to a shell.
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh
+less /tmp/hermes-install.sh
+bash /tmp/hermes-install.sh
 ```
 
-[F4 ✅, F6 ✅ — both verified nearly word-for-word against the official docs]
+Commands confirmed on the repo README: `hermes`, `hermes model`, `hermes tools`, `hermes setup`,
+`hermes doctor`, `hermes update`. `hermes setup --portal` is the paid Nous Portal path (Tool
+Gateway). Switching providers is `hermes model` — **carried** as M15; the README still documents
+`hermes model`.
 
-### 2.2 Provider ladder (corrected ordering)
-
-1. **Run one keyed provider as your primary — as the analysis puts it, "budget a keyed provider."**
-   Firecrawl's free tier (500 credits/month) is one zero-cost keyed entry; or self-host **SearXNG for
-   search** — but note SearXNG is *search-only* and cannot extract pages, so pair it with a keyed
-   extractor. [analysis §4 new findings]
-2. **The keyless ring is your automatic failover, not your plan.** With no credentials, requests rotate
-   across Exa → Parallel → Firecrawl → Keenable free tiers, multi-hop "until one serves or all are
-   throttled." This is verified — but repositioned: the docs call it **last-resort**, it is
-   vendor-rate-limited under burst load, and even keyed/managed backends fall back to it with a one-shot,
-   non-sticky rescue. Great safety net; bad primary. [F5 ✅ + analysis §4]
-3. **xAI is a separate, opt-in backend — do not conflate it with Parallel.** [F8 ❌, the brief's third
-   error, corrected]
-   - **Parallel** is its own index-backed search/extract provider and a keyless-ring member.
-   - **xAI (Grok)** is *search-only*, requires an explicit `web.backend: "xai"` (deliberately **not** in
-     the auto-detect chain), and — per the docs' own trust-model caveat — returns **LLM-generated**
-     titles, descriptions and URL choices rather than index-backed results. In a citation-driven
-     research loop that is an integrity risk: **never cite xAI results blind.**
-4. **SearXNG is now a first-class built-in backend** — `web.search_backend: "searxng"` in config. The
-   skill (`hermes skills install official/research/searxng-search`) is only an optional curl-direct
-   fallback. And drop the "air-gapped" framing: a self-hosted SearXNG still queries live search engines.
-   [F9 ⚠️]
-5. For completeness, the docs describe Exa as "neural search with semantic understanding, good for
-   research and finding conceptually related content" (verbatim [F7 ✅]). That is a quoted description,
-   not a recommendation — the corrected stack (analysis §6, item 3) budgets Firecrawl or SearXNG as the
-   keyed primaries, not Exa.
-
-### 2.3 Operational behaviour to design around [analysis §4 new findings]
-
-- **Extraction is budgeted, not summarised.** `web_extract` truncates deterministically at **15,000
-  characters** by default (`web.extract_char_limit`, clamped 2,000–500,000) and writes the full page to
-  disk with a footer telling the agent how to page through it. For long-form research either raise the
-  limit or add an `execute_code` stage — otherwise the agent works from head/tail excerpts.
-- **Duplicate queries are coalesced and pages are cached.** Identical concurrent queries from a subagent
-  fan-out collapse into one backend request; extracted URLs are cached under `~/.hermes/cache/web/`
-  across CLI, gateway, cron and subagent processes. Great for cost — but "10 independent subagents" are
-  less independent than they look.
+**64K context.** The local-models doc, fetched today, says every recommended catalog model gets
+at least a 64K window, and that Hermes does not offer builds below 4-bit. The analysis's
+"rejected at startup, upstream issue #53347" is **carried** — that issue was not re-opened this
+pass. If a model is refused, run `hermes doctor` and read the error. Do not assume the issue
+number is still the right citation.
 
 ---
 
-## 3. Workflow 2 — Deep Research: you compose it (there is no switch)
+## 2. Workflow 1 — native web search
 
-**Correction [F10 ⚠️]:** the docs have **no named "Deep Research" mode or product**. What exists is a
-composable capability set — plus a community `deep-research` skill on the Skills Hub. Assemble it from:
+**Re-checked** against the [web-search doc](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-search).
+Web search is built in: `web_search` and `web_extract`. No custom skill is required for the
+basic path.
 
-- **Delegation** — `delegate_task` spawns isolated subagents for parallel research workstreams; only the
-  final summary returns to the parent's context. The docs contradict themselves on default fan-out
-  (Features Overview says 3, the Delegation guide says 10) — check `delegation.max_concurrent_children`
-  on your build. [F11 ✅ + analysis §7]
-- **`execute_code` (Programmatic Tool Calling)** — collapses multi-step pipelines into single inference
-  calls; intermediate tool results never enter the context window, only `print()` output does (timeout
-  and stdout caps apply). [F12 ✅]
-- **Your own documents** — native document reading/context files. **NotebookLM via MCP is third-party**:
-  the `notebooklm-mcp-cli` server drives NotebookLM through *browser automation*, and the community
-  guides themselves recommend keeping a non-NotebookLM fallback. Treat it as a bolt-on, not a Hermes
-  capability. [F13 ⚠️]
-- **Cron** — natural-language recurring jobs ("daily digest" research on autopilot). Two caveats the
-  brief omitted: scheduled output is delivered to **messaging platforms**, and **every run bills the full
-  model cost**. [F14 ✅]
-- **MCP** — connect any MCP server to bolt on arXiv, SEC filings, internal wikis as research sources.
-  [F15 ✅]
-- **Token budget reality** — Deep Research is far hungrier than a single search: multi-turn planning, one
-  subagent context per workstream, long synthesis. The claim is directionally certain but unquantified;
-  one independent data point: Artificial Analysis measured Qwen3.8-27B emitting **160M output tokens**
-  across its agentic index testing vs a 43M median for comparable open-weight models. This asymmetry is
-  what justifies the local/cloud split in §5. [F16 ⚠️]
+### 2.1 Setup
+
+```bash
+hermes tools            # Web Search & Extract → pick a provider; the wizard stores the key or URL
+hermes setup --portal   # paid Portal path: gateway tools, no per-tool keys
+```
+
+### 2.2 Provider ladder
+
+The live table is wider than the 2026-09-26 edition. Backends now listed include Firecrawl
+(marked default), SearXNG, Brave, DDGS, Exa, Parallel, Tavily, Perplexity, Keenable, xAI, and
+OpenAI Native. Plan around the ones below. The others are available; they are not a
+recommendation.
+
+1. **Keyed primary.** Firecrawl is the documented default (search and extract; free tier 500
+   credits/month; keyless only when that backend is explicitly selected). Or self-host SearXNG
+   for search and pair it with a keyed extractor. SearXNG is search-only. It is not air-gapped:
+   a self-hosted instance still queries live engines, and those engines see the query.
+2. **Keyless ring is failover, not the plan.** With no credentials, requests rotate across Exa,
+   Parallel, Firecrawl, and Keenable until one serves or all are throttled. The doc calls this
+   strictly last-resort. Disable it with `web.keyless_fallback: false` if you do not want silent
+   failover onto anonymous tiers.
+3. **xAI is a separate backend.** **Re-checked:** results are LLM-generated titles, descriptions,
+   and URL choices, not index-backed results. Do not cite them blind. The older claim that xAI
+   is excluded from the auto-detect chain was **not** in the portion fetched today — set
+   `web.backend` explicitly if you use it, and do not assume the exclusion still holds.
+4. **Parallel is not xAI.** Parallel is its own index-backed search/extract provider and a
+   keyless-ring member. The brief's "Parallel/xAI routing through Grok" remains wrong (analysis
+   F8).
+
+### 2.3 Behaviour to design around
+
+**Re-checked.**
+
+- `web_extract` does not summarise. Default budget is 15,000 characters
+  (`web.extract_char_limit`, clamped 2,000–500,000). Over budget, the tool returns a head+tail
+  window (~75% head / ~25% tail) plus a `[TRUNCATED]` footer. The full text is on disk; the
+  footer names the `read_file` call. The omitted part is the **middle**, not only the tail.
+  Either raise the limit or page the file. There is no eval in this repo that the agent
+  reliably pages.
+- Identical concurrent searches are coalesced into one backend request. Extracts are cached
+  under `~/.hermes/cache/web/` across CLI, gateway, cron, and subagent processes. Ten
+  "independent" subagents on the same query are not ten backend calls. For an eval, vary the
+  query or account for the cache. Do not assume a config flag to disable it — none was in the
+  fetched section.
+
+These two bullets are load-bearing and were previously unscored ("not in the brief"). They are
+**re-checked** against the doc, not against a running install.
 
 ---
 
-## 4. Model choice for one RTX 4090 (24 GB) — corrected
+## 3. Workflow 2 — Deep Research is composed, not switched on
 
-### 4.1 The arithmetic that drives everything [analysis §3.2, verified]
+**Carried, and consistent with the docs index fetched today:** the index has no "Deep Research"
+product page. Assemble the loop from the features below. A community skill may exist; it is not
+a Nous mode. That skill was not re-fetched.
 
-The brief treated 64K context as a soft tax on VRAM headroom. More precisely, the KV cache is **the
-term that invalidates the larger-model fallback tier**: for the 36B and 70B options it exceeds what can
-fit alongside the weights on one 24 GB card at any usable speed. It is *not* dominant for every model —
-for the recommended Qwen3.8-27B, ~4 GiB of KV sits against ~17–17.8 GB of weights; that small cache
-(hybrid attention, 16 full-attention layers) is exactly why it fits where the larger models do not:
+- **`delegate_task`** — isolated subagents; only the final summary returns to the parent.
+  **The 3-vs-10 contradiction is still live**, re-checked via the current docs search:
+  the features overview says 3 concurrent by default; the configuration reference says
+  `delegation.max_concurrent_children` defaults to 3; the delegation guide says up to 10 by
+  default. Read the value on your build. Do not hard-code 10. Batches over the cap return a
+  tool error rather than truncating (configuration doc). Nested depth defaults to flat
+  (`max_spawn_depth` 1). Raising both multiplies spend (the docs' own example: 3×3×3 = 27
+  leaves).
+- **`execute_code`** — one inference turn, Python on the host, only `print()` returns.
+  See §6 before enabling it. Timeout default 300s, stdout cap 50 KB, 50 tool calls per
+  execution. All three are configurable.
+- **Your documents** are a native capability. NotebookLM-via-MCP is **carried** as third-party
+  browser automation, not a Hermes feature. Treat it as a credential-bearing browser driver.
+- **Cron** — **carried:** scheduled output goes to messaging platforms, and every run bills the
+  full model cost. Not re-fetched.
+- **MCP** — native. Community servers are unsigned code. Pin a commit and read it (§6).
+- **Token appetite** — directionally certain (one context per workstream, plus synthesis). The
+  previous edition's "Qwen3.8-27B emitted 160M output tokens on the AA agentic index" is
+  **withdrawn** here. It was a blog/secondary citation and was not re-read from Artificial
+  Analysis. Do not use it to size a budget.
+
+---
+
+## 4. Model choice for one RTX 4090 (24 GB)
+
+### 4.1 Arithmetic
 
 ```
-KV bytes/token = 2 (K+V) × layers × kv_heads × head_dim × bytes_per_element   [2 B at fp16]
+KV bytes/token = 2 (K and V) × full-attention layers × kv_heads × head_dim × bytes_per_element
 ```
 
-| Model | Geometry | KV per token (fp16) | KV at 64K | Basis |
+fp16/bf16 is 2 bytes. q8_0 is about 1 byte per element, q4_0 about 0.5, **ignoring block
+scales** — so quantised KV figures are lower bounds on the cache, not allocator output.
+GGUF file sizes below are decimal GB as listed on Hugging Face. llama.cpp and `nvidia-smi`
+account in GiB. This file converts only when it sums, and shows both.
+
+`python scripts/kv_cache.py --preset <name>` reproduces the rows. The script's fit line is a
+weights+cache sum. It does **not** include the vision projector, CUDA context, or compute
+buffers. The managed runtime's green/amber/red badge includes those. That badge is the fit
+check that counts; this section is the pre-download estimate.
+
+| Model | What was fetched | KV at 64K, fp16 | Basis |
+| --- | --- | --- | --- |
+| Qwen3.8-27B | Official `config.json` and model card | **4.00 GiB** (4.295 GB) from full attention only | **Derived.** 16 full-attention layers × 4 KV heads × 256 × 2 bytes × 2. Exactly 64 KiB/token. |
+| Qwen3.8-27B linear layers | Same config: 48 `linear_attention` layers, `mamba_ssm_dtype=float32` | **Not zero.** Fixed state, estimated **0.15 GiB**, does not grow with context | **Derived estimate, not measured.** Recurrent state assumed `48 v_heads × 128 × 128 × 4` bytes per layer (3.0 MiB × 48 = 0.141 GiB) plus a conv state of ~6 MiB. Wrong shape would change this term, not the 4 GiB term. |
+| Gemma 4 26B-A4B | Official `config.json` and model card | **0.72–1.45 GiB combined** at 64K, the range `scripts/kv_cache.py --preset gemma4-26b-a4b` prints | **Derived range.** Sliding ~0.10–0.20 GiB (window-capped) plus global 0.625 GiB if K=V are unified, 1.25 GiB if they are not. The old "~small / 17.5 GiB at 32K / 192K in 20.9 GB" fit verdict is **withdrawn**. |
+| Hermes 4.3 36B | Not re-fetched | 16 GiB if geometry is 64 × 8 × 128 | **Carried** from the Seed-OSS-36B config cited in analysis §8. |
+| Llama 3.3 70B | Not re-fetched | 20 GiB if geometry is 80 × 8 × 128 | **Carried.** Enough, with any serious 70B quant, to rule out a fully on-GPU 64K path. |
+| Qwen3-Coder-30B-A3B | Not re-fetched | 6 GiB if geometry is 48 × 4 × 128 | **Carried.** |
+
+**Qwen linear layers are not a free zero.** The previous edition assumed DeltaNet contributes
+0 KV. The growing cache is the full-attention term only — that part of the assumption matches
+the layer-type list. The linear layers still hold a fixed recurrent state. At the estimate
+above it is ~0.15 GiB. That does not flip the 24 GiB fit. It does mean "0" was the wrong word.
+
+**Gemma, so the range is not a shrug.** Config: 30 layers, pattern 5 sliding + 1 full, repeated
+5 times (25 sliding, 5 full). `sliding_window` 1024. Sliding fields: `num_key_value_heads` 8,
+`head_dim` 256. Global fields: `num_global_key_value_heads` 2, `global_head_dim` 512.
+`attention_k_eq_v: true`. The model card says global layers use unified Keys and Values.
+
+- Sliding, separate K+V, capped at 1024 tokens: 25 × 8 MiB = **0.195 GiB**, independent of
+  context past 1024. If unified K=V applies to sliding layers too, about half of that.
+- Global, unified (1×, not 2×), `global_head_dim` 512: **0.625 GiB at 64K**, 2.50 GiB at 256K.
+- If "unified" does not mean a 1× cache, double the global term: **1.25 GiB at 64K**.
+
+No official GGUF file size was fetched this pass. Do not add a blog's 15.6 GiB to this range
+and call it a measured fit. Download the file listing, convert GB→GiB, add the range, then
+leave room for buffers.
+
+**Qwen weight + cache, unit-correct.** There is no official Qwen GGUF. The file table on
+[`unsloth/Qwen3.8-27B-GGUF`](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) at `main`
+(fetched as a listing, not a benchmark) included `UD-Q4_K_M` 16.5 GB, `Q4_0` 16.1 GB,
+`Q4_1` 17.5 GB, `Q8_0` 29 GB. A plain `Q4_K_M` at 17.1 GB was seen on an older commit, not
+on that `main` listing — do not assume it is still published. 16.5 GB decimal = 15.37 GiB.
+
+| Piece | GiB |
+| --- | --- |
+| Unsloth `UD-Q4_K_M` on `main` (16.5 GB decimal) | 15.37 |
+| Full-attention KV, 64K, fp16 | 4.00 |
+| Linear-layer state (estimate, 0.147 GiB in the script) | 0.15 |
+| **Sum, before projector and buffers** | **19.5** |
+| Headroom vs 24 GiB, before those extras | ~4.5 |
+
+A 17.5 GB `Q4_1` file is 16.30 GiB + 4.15 GiB cache/state ≈ 20.5 GiB before buffers. Still
+under 24 GiB on this arithmetic, with less room. Re-read the file table the day you download.
+
+q8_0 KV cuts the 4.00 GiB term to about 2.00 GiB; q4_0 KV to about 1.00 GiB, scales ignored.
+The previous "22–23 GB all-in (17.8 GB + ~4.6 GB)" mixed units and a blog weight. Prefer the
+table above, then the runtime badge.
+
+The tokenizer template on the Hub defaults `reasoning_effort` to **`xhigh`** when thinking is
+on. That is a token-budget fact, not a quality claim. For extraction and tool formatting, set
+`low` or disable thinking. Leave `xhigh` for the turns that need it.
+
+### 4.2 Shortlist
+
+Role names are **judgments**. They are not "best", and they are not a leaderboard.
+
+| Role (judgment) | ID | Licence | Why it is on the list | What this revision did **not** establish |
 | --- | --- | --- | --- | --- |
-| Hermes 4.3 36B (Seed-OSS-36B base) | 64 layers × 8 KV × 128 | 256 KiB | **16 GiB** | computed |
-| Llama 3.3 70B | 80 layers × 8 KV × 128 | 320 KiB | **20 GiB** | computed |
-| Qwen3-Coder-30B-A3B | 48 layers × 4 KV × 128 | 96 KiB | 6 GiB | computed |
-| Qwen3.8-27B | 16 full-attn layers × 4 KV × 256 | 64 KiB | ~4 GiB (≈2.3 GB/32K, measured) | computed + measured |
-| Gemma 4 26B-A4B | hybrid attention | — | ~small | estimated, not derived — treat as indicative |
+| Default local weight | [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B) | Apache 2.0, stated in the model-card frontmatter. [Card](https://huggingface.co/Qwen/Qwen3.8-27B). | Exists. SHA pinned above. 262,144 native context (card; 1,000,000 via YaRN is the card's claim). Tool-call template is in the tokenizer. Computed 64K cache fits beside a ~16–17 GB Q4 file with a few GiB before buffers. Newer than the other two local rows. | That it is the best 24 GiB model. AA Index 52 vs 38. Any tok/s number. That the managed catalog certifies it on your driver. Vendor card numbers (Terminal-Bench 2.1 73.0 vs 63.4 for Qwen3.6-27B; SWE-bench Pro 61.7 vs 53.5) are **vendor-reported, same table** — usable as a within-vendor comparison, not an independent ranking. |
+| Throughput candidate | [`google/gemma-4-26B-A4B-it`](https://huggingface.co/google/gemma-4-26B-A4B-it) | Apache 2.0 on the card; the linked licence page resolved to the Apache 2.0 text. Re-read it before production — Google's use-policy URL has moved before. | Card: 25.2B total, 3.8B active, 256K context, native function calling, hybrid attention. Active-parameter count is the *mechanism* reason to expect higher decode speed than a dense 27B. KV range above is small next to weights. | Measured tok/s. The old 149–194 tok/s figure is **withdrawn** from this file (community blog, not re-measured). A numeric on-GPU fit. Confirm the GGUF you download plus §4.1 before treating it as the faster swap-in. |
+| Headroom candidate | [`openai/gpt-oss-20b`](https://huggingface.co/openai/gpt-oss-20b) | Apache 2.0 ([OpenAI announcement](https://openai.com/index/introducing-gpt-oss/), 2025-08-05). | Vendor: 21B total / 3.6B active, 128K context, MXFP4 build "only requires 16 GB". That is a vendor memory claim, not a 64K measurement on a 4090. Leaves the most room for an embedding sidecar **if** the claim holds. | Quality. "Cleanest tool calls" was sentiment in the analysis and stays withdrawn. The model is 13 months old as of this revision. |
+| Only if you need that tool-call format | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | **Carried.** | Analysis M9: real SWE-bench Verified 50.3–51.6%, not 71.4%. 6 GiB fp16 KV at 64K is tight beside ~18 GB weights. | Not re-fetched. Do not quote the SWE-bench range as fresh. |
 
-**Reading the basis labels.** "Computed" means derived from the model's published attention geometry via
-the formula above. The Qwen3.8-27B row *blends two methods* — that computed geometry (16 full-attention
-layers × 4 KV heads × 256 head_dim) and a measured ~2.3 GB per 32K tokens — which agree closely but are
-not the same measurement; the blend is on the residual-uncertainty list (analysis §7 and §7 below). The
-Gemma row is an estimate — the analysis did not derive it — so no number is given.
+**Withdrawn from the recommendation, not from history:** "Qwen3-Coder 32B Instruct" does not
+exist (analysis M9). It was not re-404'd this pass — the local existence script hit TLS errors,
+which are not 404s (§12). Do not plan on a "Qwen3-Coder-Next 30B Flash" either (analysis:
+unconfirmed). No Qwen 4 weights repo was confirmed this pass. Secondary writeups said Qwen 4
+was still in training on 2026-09-22; that is not a primary source. Re-query the Hub before you
+download.
 
-**Unit note (GB vs GiB).** GGUF file sizes are published in decimal GB; llama.cpp allocates memory in
-GiB. This file reports each figure in its published unit and normalises only when summing — e.g. the
-~39 GB Hermes 4.3 total in §4.3 is stated in a single unit (21.8 GB weights + 16 GiB KV = 17.2 GB).
-Mixing the two units inside one sum is how the analysis's own v1 arrived at 37.8 GB (analysis §3.2).
+### 4.3 Ruled out on one 24 GiB card, fully on GPU, at 64K
 
-### 4.2 The corrected shortlist [analysis §5 — recommendations, refreshed 2026-09-26, and they decay]
+- **Llama 3.3 70B, any weight quant, as a usable on-GPU path.** Carried: 20 GiB KV plus
+  ~21–23 GB of weights. RAM spill can crawl it (§4.4). That is not a fallback you should plan
+  research on.
+- **Hermes 4.3 36B as the on-GPU reasoning engine.** Carried file size Q4_K_M 21.8 GB
+  (20.3 GiB) + 16 GiB KV ≈ 36 GiB before buffers. Needs a second 24 GiB card or an 80 GiB
+  card. Keep a Hermes model only as a **policy escape hatch** for topics your planner refuses,
+  not as the planner. Low refusal is not a compliance waiver: you are still bound by law and
+  by the provider terms. The analysis's RefusalBench restatement (74.60 vs 49.07, both
+  non-reasoning) is **carried**, not re-read.
+- **Hermes 4 405B as the planner.** See §5. Price is not the reason to keep it.
+- **"Claude Opus leads."** Analysis M8 softened this, and it is now also stale as a product
+  name. Use the IDs in §5, re-read the vendor page the day you subscribe, and do not import a
+  rank order from a roundup blog.
 
-| Model | Released | Context | Q4 weights | Fits 64K on one 4090? | Role in this workflow |
-| --- | --- | --- | --- | --- | --- |
-| **Qwen3.8-27B** ⭐ | 2026-08-14 | 262K native, 1M via YaRN | ~17–17.8 GB | ✅ ~22–23 GB all-in (17.8 GB + ~4.6 GB f16 KV) | **Default local pick.** Dense 27B VLM (hybrid attn), Apache 2.0. AA Intelligence Index **52 vs 38** (**v4.1.1**, nine evals) for the superseded Qwen3.6-27B at identical size. ~50 tok/s decode plain, ~40 at 128K depth. *Caveat: defaults to xhigh reasoning effort and over-thinks — budget tokens.* |
-| Gemma 4 26B-A4B | 2026-04 | 256K | 15.6 GiB | ✅ ~17.5 GiB at 32K; 192K measured within 20.9 GB | **Throughput pick.** MoE ~3.8B active, *measured* 149–194 tok/s on a 4090 — the brief's "~85 tok/s" was a wrongly-attributed bandwidth estimate [M10 ⚠️]. Native function calling. |
-| Qwen3-Coder-30B-A3B | 2025-07 | 262K | ~18.6 GB | ⚠️ tight — 6 GiB fp16 KV at 64K (use q8_0 KV) | Only if you specifically want its purpose-built tool-call format. Real SWE-bench Verified is **50.3–51.6%** (OpenHands/Qwen) — not the brief's 71.4%, which tracks DeepSeek V4 Pro [M9 ❌]. Now an older generation. |
-| gpt-oss-20B | 2025-08 | 131K | ~12–14 GB | ✅ most headroom | Headroom pick — leaves room for an embedding sidecar. τ-bench Retail 54.8%. "Cleanest tool calls" was sentiment, not a benchmark, and the model is 13 months old [M12 ⚠️]. |
-| ~~Qwen3.6-27B~~ | 2026-04-22 | 262K | 16.8 GB | ✅ | **Superseded by Qwen3.8-27B** — same size, licence and VRAM; it was the analysis's own pick until it proved six weeks stale [M11 ⚠️]. |
+### 4.4 Serving
 
-### 4.3 Explicitly ruled out
+**Re-checked** on the local-models doc, except the Ollama bullet.
 
-- **First, a family-structure note the brief blurred [M1 ⚠️]:** the public Hermes "family" is **two
-  release generations**, not one — Hermes 4 (14B/70B/405B, August 2025) and Hermes 4.3 (36B, December
-  2025, trained start-to-finish on the Psyche distributed network [M2 ✅]). The brief's "four sizes from
-  14B to 405B" is literally true only by counting across both generations. That blur matters below: the
-  ruled-out planner (§5, step 2) and the escape-hatch model are different generations, not two sizes of
-  one thing.
-- **"Qwen3-Coder 32B Instruct"** — the brief's headline pick, and it **does not exist**. The official
-  Qwen3-Coder family is 480B-A35B, 30B-A3B and Qwen3-Coder-Next (80B-A3B); Qwen's own materials list 32B
-  among the *non*-official sizes. [M9 ❌] The brief's underlying instinct — a 30B-class MoE with ~3B
-  active parameters on a 24 GB card — was sound; the name and the score were the problem. Likewise, a
-  rumoured "Qwen3-Coder-Next 30B Flash" at ~18 GB is **unconfirmed by any primary source — do not plan
-  around it.** [analysis §3.1]
-- **Llama 3.3 70B as an on-GPU path, at any weight quantisation** — 20 GiB of KV cache at the mandatory
-  64K window (the attention cache is the one thing the runtime never spills) plus ~21–23 GB of weights
-  cannot fit in 24 GB of VRAM. Scope note: this is a *fully on-GPU / practical-performance at 64K*
-  verdict. The managed runtime **does** support spilling overflow weights to system RAM (§4.4), so a
-  single-4090 *host* can technically run it — with most weights in RAM, at RAM-bound speed. That is a
-  crawl, not a usable fallback, so the IQ2_XXS recommendation stays deleted rather than amended. [M14 ❌]
-- **Hermes 4.3 36B on one card** — its benchmark numbers are real (MATH-500 93.8, MMLU 87.7, BBH 86.4,
-  AIME 24 71.9, GPQA-Diamond 65.5 [M6 ✅]) and the brief's "does not fit a single 4090 at good quality"
-  verdict was **correct**: 21.8 GB Q4_K_M weights + 16 GiB KV at 64K ≈ **~39 GB**. It needs 2×24 GB or an
-  80 GB card (Q8_0 = 38.4 GB fits an A100 with KV). *On-GPU at 64K*, that is: Q3_K_M plus a heavily
-  quantised KV cache lands ~22 GB on one card (technically loadable, quality-degraded, zero headroom),
-  and RAM spill would merely run it slowly — neither changes the recommendation. [M4/M5 ✅] Two framing
-  fixes: "nearly matches the 70B at half the VRAM" breaks *precisely at the 64K window you need* [M3 ⚠️],
-  and the RefusalBench headline mixed modes — like-for-like it is **74.60 (non-reasoning 4.3) vs 49.07
-  (non-reasoning 70B)**, not 74.6 vs 59.5 [M7 ⚠️]. Keep a Hermes model available as a low-refusal
-  *policy escape hatch* for sensitive research topics — not as the reasoning engine.
-- **Hermes 4 405B as the planner** — see §5, step 2.
-- **"Claude Opus leads on raw frontier benchmarks"** → softened to "at or near the frontier"; the
-  ordering is index- and effort-dependent and shifts weekly. Treat the *generation gap* as hard, the
-  *rank order* as soft. [M8 ⚠️]
-
-### 4.4 Serving engine [M13 ⚠️ + analysis §5 practical notes]
-
-- **Managed llama.cpp runtime** (simplest; Hermes's default): it prices every catalog model against your
-  GPU *including* context/KV state, picks the highest-quality ≥4-bit build that fits, guarantees ≥64K,
-  grows the window as needed, and **spills overflow to system RAM** (expert weights first, never the
-  attention cache). RAM spill is a supported-but-slow path, not a refusal — this corrects both the brief
-  and the v1 analysis. [analysis §3.3]
-- **llama.cpp server** (control): set the context explicitly — `--ctx-size 65536`.
-- **vLLM/SGLang** for concurrent serving (the Hermes docs' own recommendation; they never mention
-  TensorRT-LLM). [M13 ⚠️]
-- **Ollama** is fine for solo use; measured overhead is ~2–8% in most tests (the brief's "10–15%" is the
-  pessimistic tail). **Trap:** Ollama's `/api/show` reports the model's *maximum* context, not the
-  effective `num_ctx` — set `OLLAMA_CONTEXT_LENGTH=64000` and match it in `config.yaml`. [analysis §5]
-- **Wiring to Hermes** [M15 ✅, unchanged]: if your local server has exactly one model loaded,
-  `/model custom` auto-detects it; or set `provider: custom` in `config.yaml` — a first-class provider,
-  not an alias, working with Ollama, vLLM, llama.cpp server, SGLang, LocalAI.
+- **Managed llama.cpp runtime** is the default that does not depend on Arch packaging. It
+  prices catalog models against your GPU including context, picks the highest-quality build at
+  or above 4-bit that fits, guarantees ≥64K for recommended models, grows the window, and
+  spills overflow to system RAM (expert weights first, never the attention cache). Amber
+  "Uses system RAM" is a supported slow path, not a refusal. Red means the machine cannot run
+  that model under the 4-bit floor.
+- **Your own llama-server** is detected if it is already listening. For a manual build, set
+  the context explicitly (`--ctx-size 65536`) and confirm CUDA is the backend that actually
+  ran (§9).
+- **vLLM / SGLang** remain the docs' concurrent-serving suggestion. TensorRT-LLM is still not
+  the documented path (analysis M13, carried).
+- **Ollama** — **carried:** set `OLLAMA_CONTEXT_LENGTH=64000` and match `config.yaml`.
+  `/api/show` reports the model's maximum context, not the effective `num_ctx`. The "10–15%
+  overhead" figure stays withdrawn; the analysis's central estimate was 2–8% and was not
+  re-measured.
+- **Wiring.** If one model is loaded, `/model custom` auto-detects it. Otherwise
+  `provider: custom` in `config.yaml`.
 
 ---
 
-## 5. Recommended concrete stack — step by step
+## 5. Concrete stack
 
-*Same hybrid architecture as the brief; every specific model and config corrected.*
+**Judgment**, except where a label says otherwise.
 
-1. **Local tier (the workhorse)** — **Qwen3.8-27B Q4_K_M** for web-page extraction/summarisation,
-   tool-call formatting and simple sub-agent research legs (~22–23 GB all-in at a real 64K window).
-   Swap in **Gemma 4 26B-A4B** when raw throughput and parallel subagent fan-out matter more than depth.
-   [analysis §6, item 1]
-2. **Planner/synthesis tier (corrected — this is the largest plan change)** — route Deep Research's
-   top-level orchestration (multi-turn coherence, long synthesis, citation-quality writing) to a
-   **current (2026) frontier or frontier-adjacent model with verified tool calling — not Hermes 4 405B.**
-   The 405B is an August-2025 fine-tune whose OpenRouter-mirrored AA panel reads: Terminal-Bench Hard
-   11.4%, τ²-Bench Telecom 22.2%, AA-LCR long-context 22.3%, HLE 10.9%, non-hallucination rate 5.5% —
-   and its top OpenRouter consumers are roleplay front-ends, not agent harnesses. Long-context reasoning
-   is the exact capability cross-source synthesis needs most. **Pin:** those scores were mirrored on
-   OpenRouter's model page on 2026-09-26, reasoning mode; the AA index has been revised several times
-   (v4.1 → v4.3.x) and effort settings move scores substantially between boards, so quote them as
-   indicative of a **generation gap**, not a precise ranking. [analysis §3.4, analysis §7]
-   - If the Hermes lineage matters, use **Hermes 4.3 36B for short-context legs** or Portal-routed
-     models, and keep a low-refusal model as a policy escape hatch (RefusalBench, §4.3 above) — not as the
-     reasoning engine.
-   - **Before committing, send one live request to confirm your gateway route actually accepts `tools`**
-     — the OpenRouter model page contradicts itself on this. [analysis §7]
-   - Cost reality check: the brief's "$1/M in, $3/M out" figure for the 405B was accurate (a heavy
-     ~500K-in / 100K-out run ≈ $0.80), but that pricing is no longer special in 2026 — so it is not a
-     reason to keep a weak planner. [M17 ✅(facts)]
-3. **Web search tier** — keyed Firecrawl (500 free credits/mo) or self-hosted SearXNG + a keyed
-   extractor; keyless ring as automatic failover; xAI opt-in only with the citation caveat; paid Portal =
-   lowest-friction path. [§2.2]
-4. **Memory tier** — use a **memory-provider plugin** (LanceDB, Honcho, Mem0) pointing at a **local
-   OpenAI-compatible embedding endpoint** (`nomic-embed-text` or `EmbeddingGemma-300M`) to keep
-   memory/session search local even when the main model is cloud. The brief's `auxiliary:
-   session_search` config is **version-sensitive** — a Sept-2026 practitioner reference reports the slot
-   removed in current builds (session search now returns DB content via SQLite FTS5). Verify against
-   your installed version before wiring it. [M16 ⚠️]
-5. **Sequencing (inverted from the brief)** [M18 advisory + analysis §6, item 6] — the brief said "start local-only and
-   add the cloud planner when quality plateaus." That defers the step most likely to fail. Instead:
-   - **Stand up web search end-to-end locally first** — it genuinely fits a 4090 (§4.2 models handle
-     single/few-tool-call lookups fine), and costs nothing to validate.
-   - **Validate the planner path early** with real multi-hop research tasks (10+ sources, recovery from a
-     failed tool call, format preservation across a second turn — the brief's own operational benchmark).
-     The local model is the part of this stack *least* likely to be the bottleneck; multi-hop planning on
-     a 24 GB card is where quality plateaus first.
+1. **Local tier.** `Qwen/Qwen3.8-27B`, community quant `unsloth/Qwen3.8-27B-GGUF` `UD-Q4_K_M`
+   (16.5 GB on the `main` listing fetched today — there is no official GGUF), for extraction,
+   tool-call formatting, and short subagent legs. Pin the Hub SHA in §4.2 when you download;
+   if `lastModified` is no longer 2026-08-14, re-read the card before trusting §4.1. Set
+   `reasoning_effort` to `low` (or thinking off) for those legs. Swap in Gemma 4 26B-A4B only
+   after you have added *your* GGUF size to the §4.1 range and the runtime badge is green.
+   Do not swap it in because a blog measured 194 tok/s.
+2. **Planner tier.** Not Hermes 4 405B. On 2026-09-27 the OpenRouter page still listed it at
+   **$1 / $3 per million**, 131K context, and mirrored an Artificial Analysis panel: Terminal-Bench
+   Hard 11.4%, τ²-Bench Telecom 22.2%, AA-LCR 22.3%, HLE 10.9%, non-hallucination rate 5.5%
+   ([OpenRouter](https://openrouter.ai/nousresearch/hermes-4-405b), which links
+   [the AA model page](https://artificialanalysis.ai/models/hermes-4-llama-3-1-405b-reasoning)).
+   **The AA page itself was not re-fetched**, so index version and effort are not pinned.
+   Treat the panel as a generation-gap signal from a gateway mirror, not as a precise rank.
+   The largest public app on that page was a roleplay front-end. A heavy 500K-in / 100K-out
+   call at $1/$3 is still $0.80. That price is not a reason to keep a weak planner.
 
-**Bottom line (updated):** hybrid is still the benchmark-justified answer — web search runs fully local;
-Deep Research's bursty top-level planning justifies a small cloud spend. What changed is every specific
-model attached to that architecture, the search-provider ordering, and the sequencing.
+   Named candidates, each with tool use stated on the vendor page fetched 2026-09-27. Prices
+   are list prices, not cached prices. Re-read them the day you subscribe.
+
+   | Role (judgment) | ID | List price / 1M in, out | Context | Source |
+   | --- | --- | --- | --- | --- |
+   | Default planner | `claude-opus-5-5` | $4 / $20 | 1M | [Anthropic models overview](https://platform.claude.com/docs/en/models/overview). Their own "start here for most workloads". Tool use listed for all current models. |
+   | Cheaper daily planner | `claude-sonnet-5` | $2 / $10 | 1M | Same page. |
+   | OpenAI balance pick | `gpt-6-sol` | $2 / $10 | 1.05M | [OpenAI models](https://developers.openai.com/api/docs/models). Tools listed: functions, web search, file search, computer use. |
+   | Lower list price, intro rate | `gemini-3.8-flash` | $0.75 / $3.75 through 2026-12-31 | 1,048,576 in / 65,536 out | [Model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash) (function calling: supported) and [latest-model](https://ai.google.dev/gemini-api/docs/latest-model) (intro price). Standard pricing starts 2027-01-01; the post-intro number was not in the section fetched — read the pricing page that day. |
+
+   Harder-than-default, not the default: `claude-fable-5-1` and `gpt-6-astra` are both $10 / $50
+   on those same pages. Use them when a cheaper ID fails your own tasks, not as the steady
+   planner.
+
+   **Before any of these is "the" planner**, run one live tool call:
+
+   ```bash
+   python scripts/test_tools.py --provider anthropic --model claude-opus-5-5
+   # prints the request, sends nothing
+   python scripts/test_tools.py --provider anthropic --model claude-opus-5-5 --send
+   # sends only if ANTHROPIC_API_KEY is set; the key is not printed
+   ```
+
+   OpenRouter and Nous Portal are OpenAI-compatible. Point `--base-url` at the gateway and
+   `--provider openai`. A 400 that says tools are unsupported means that route is not your
+   planner, whatever the marketing page says. Hermes 4.3 36B remains the local escape hatch
+   for short-context legs you are willing to run slowly or on a bigger card — not the
+   reasoning engine on this 4090.
+3. **Web search.** §2.2. Keyed Firecrawl, or SearXNG plus a keyed extractor. Keyless ring as
+   automatic failover only. xAI only if you accept the citation caveat and set the backend
+   explicitly.
+4. **Memory.** **Carried, not re-verified on an install:** prefer a memory-provider plugin
+   (the analysis named LanceDB, Honcho, Mem0) aimed at a local OpenAI-compatible embedding
+   endpoint, so session search stays local when the planner is cloud. The brief's
+   `auxiliary: session_search` block is version-sensitive. A single practitioner blog is not
+   enough to declare the slot removed. Check your installed config before wiring it.
+5. **Sequencing (advisory).** Stand up web search locally first — the §4.2 weight is the part
+   least likely to be the bottleneck, and it costs a download rather than a subscription.
+   Then validate the planner on a real multi-hop task (many sources, a failed tool call, a
+   format that has to survive a second turn) **before** you invest in cron, MCP, or a second
+   local quant. This inverts the brief's "add the planner when quality plateaus." It is
+   advice, not a graded claim.
 
 ---
 
-## 5.1 Security, cost, and operational concerns — added 2026-09-27 critical review
+## 6. Security
 
-> This section did not exist in the original corrected edition. It is added by `CRITICAL_REVIEW.md` to address overconfidence.
+PR #4 was right that the previous edition had no threat model. It was wrong that the docs are
+silent. The [code-execution doc](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution)
+and the [security doc](https://hermes-agent.nousresearch.com/docs/user-guide/security) were
+fetched for this section. This is not a pentest.
 
-**Security:**
-- `execute_code` is arbitrary code execution. The docs say "intermediate tool results never enter context, only print() output" but do not say it is sandboxed. Treat it as RCE: run Hermes in a container/gVisor, no host secrets mounted, network egress filtered.
-- `web_extract` ingests untrusted HTML. 15k char truncation can hide prompt injection in the tail. The footer says "how to page through" — does the agent reliably detect injection? No eval provided. Mitigation: use an extractor that strips scripts, and add an LLM guard that treats extracted content as data, not instructions.
-- MCP NotebookLM via browser automation (`notebooklm-mcp-cli`) drives a real browser. That is a credential-theft surface. The community guide's own advice "keep a non-NotebookLM fallback" is a reliability warning, not a security review.
-- Community skills (`hermes skills install official/research/searxng-search`) are unpinned code. No hash, no signature. Pin to commit SHA and audit.
+**`execute_code` is a child process on the agent host, not a container, unless you chose a
+remote terminal backend.** What the doc actually guarantees:
 
-**Cost:**
-- Local is not free. RTX 4090 ~450W peak, ~250W avg inference, 10h/day = 2.5 kWh/day. At $0.30/kWh = $0.75/day + amortized GPU ($1600/3y ≈ $1.46/day) = ~$2.21/day baseline before any cloud spend.
-- Cloud heavy run: 500K in / 100K out at $1/$3 = $0.80/run as stated. 10 runs/day = $8/day. Hybrid is only cheaper if local tier actually offloads >70% of tokens — not measured.
-- Add a cost model: track tokens per research job (input, output, cached) and compare.
+- Environment scrubbing. Names containing `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`,
+  `PASSWD`, or `AUTH` are stripped. A small fixed set of `HERMES_*` names is passed. Anything
+  else you need must be allowlisted, and Hermes-managed provider credentials cannot be
+  re-allowed that way.
+- Tool whitelist inside the script: no recursive `execute_code`, no `delegate_task`, no MCP.
+  `terminal()` **is** available, foreground only, and goes through the same approval path as a
+  normal terminal call.
+- Limits: 300s, 50 KB stdout (full output under `~/.hermes/cache/exec/`), 50 tool calls.
+- `code_execution.mode: project` (the default) runs in the session working directory. A script
+  can `open(".env")`. `strict` uses a temp directory and Hermes's own interpreter. Switching
+  mode does not change the credential scrub or the tool whitelist.
 
-**Operational failure modes:**
+What to do:
+
+- Leave `approvals.mode` at `smart` or `manual`. `off`, `hermes --yolo`, and `/yolo` disable
+  dangerous-command prompts. The doc says YOLO does not bypass a hardline blocklist; do not
+  treat that as a sandbox.
+- For a research agent that will execute code, prefer the Docker terminal backend over the
+  local one, and do not mount host secrets into it. Container isolation is a documented
+  backend, not the default for `execute_code`.
+- Set `code_execution.mode: strict` unless the script must import the project.
+- Cron and other unattended sessions default `cron_mode` / `unattended_mode` to `deny` on
+  dangerous commands. Leave that deny.
+
+**`web_extract` is untrusted content.** The 15k window shows head and tail. A prompt injection
+can sit in the visible head, or in the middle that the agent later pages. Treat extracted
+pages as data. Do not raise the char limit to 500,000 and then let the same model both read
+the page and approve shell commands.
+
+**MCP and skills.** `hermes skills install …` and third-party MCP servers (including a
+NotebookLM browser driver) are unpinned code with whatever credentials the browser or the
+server holds. Pin a git SHA, read the server, and do not point one at a logged-in browser
+profile you care about. The security doc describes MCP credential filtering; filtering is not
+a review of the server.
+
+**SearXNG.** Bind it to localhost unless you intend to run a public metasearch. It still sends
+queries to the engines it is configured to use.
+
+**Installer.** The official one-liner is `curl | bash`. Read the script first (§1).
+
+---
+
+## 7. Cost
+
+Local is not free, and hybrid is not automatically cheaper. No token split was measured. Fill
+in your own rate and purchase price. The examples are arithmetic, not a quote.
+
+**Power, upper bound.** RTX 4090 board power is 450 W TDP. Measured draw during inference is
+lower and was not measured here. Daily energy at a flat 450 W is `hours × 0.45 kWh`.
+
+| Assumption (labeled, not measured) | Energy | At $0.15/kWh | At $0.30/kWh |
+| --- | --- | --- | --- |
+| 2 h/day at 450 W (TDP ceiling) | 0.90 kWh | $0.14 | $0.27 |
+| 8 h/day at 300 W (illustrative average — **not measured**) | 2.40 kWh | $0.36 | $0.72 |
+
+Amortise the card yourself: `purchase_price / (years × 365)` per day, whether or not you run a
+job. A $1,800 card over 3 years is about $1.64/day. That number is an illustration. Idle VRAM
+has an opportunity cost only if you would otherwise have used the card for something else —
+usually you would not. Do not add $1.64 to every research run and call the GPU "more expensive
+than the API."
+
+**One heavy planner call, list price, 500K input + 100K output, no cache.** Derived from §5
+prices.
+
+| Route | This call |
+| --- | --- |
+| Hermes 4 405B at $1 / $3 | $0.80 |
+| `gemini-3.8-flash` intro ($0.75 / $3.75) | $0.75 |
+| `claude-sonnet-5` or `gpt-6-sol` at $2 / $10 | $2.00 |
+| `claude-opus-5-5` at $4 / $20 | $4.00 |
+| `claude-fable-5-1` or `gpt-6-astra` at $10 / $50 | $10.00 |
+
+Ten such calls a day on Opus 5.5 is $40 before cache, not "a few dollars." Cache and batch
+discounts change this; they are provider-specific and not applied above. Hybrid beats
+all-cloud only if the local tier actually absorbs the bulk of tokens. Log input, output, and
+cached tokens per job for a week before you believe that it does.
+
+---
+
+## 8. Failure modes
+
 | Symptom | Likely cause | Detection | Mitigation |
 | --- | --- | --- | --- |
-| OOM at 64K | KV 20 GiB + weights >24 GiB | `nvidia-smi`, managed runtime amber state | Use q8_0 KV, lower quant, or smaller model; see `scripts/kv_cache.py` |
-| 2 tok/s crawl | RAM spill (expert weights in system RAM) | `htop` shows high RAM, low GPU util | Reduce context or switch to 2×24 GB |
-| Duplicate subagent queries return identical results | Query coalescing + `~/.hermes/cache/web/` | Cache hit logs | Add jitter/nonce to queries, or disable cache for eval |
-| Agent works from head/tail excerpts | 15k char limit | Footer "page through" in output | Raise `web.extract_char_limit` or add `execute_code` summarization stage |
-| Tool calls rejected by gateway | OpenRouter page self-contradicts on tools support | 400 error "tools not supported" | Test script: `scripts/test_tools.py` (TODO) |
-
-**Arch Linux gap:**
-- Title says Arch Linux, body has zero Arch steps. Minimum appendix needed: `pacman -S nvidia nvidia-utils cuda`, driver 555+, `yay -S llama.cpp-cuda`, `python -m venv`, `vLLM` CUDA 12.6 wheel, `ollama` service override for `OLLAMA_CONTEXT_LENGTH`.
-- Rolling release risk: CUDA driver + kernel mismatch breaks `llama.cpp` server. Pin kernel or use DKMS.
-
-**Licensing:**
-- Model table needs license column with link to LICENSE. Qwen3.8 Apache 2.0 claim needs HF link; Gemma 4 has Google acceptable use policy; gpt-oss-20B has OpenAI terms. Low-refusal (RefusalBench 74.6%) does not waive legal liability for edgy research.
+| Process killed, or amber "Uses system RAM" | Weights + KV + buffers > GPU memory | `nvidia-smi`; runtime badge | Smaller quant, q8_0 KV, shorter window, or a smaller model. Re-run `scripts/kv_cache.py` against the file you downloaded. RAM spill is a crawl, not a fix. |
+| ~2 tok/s, GPU idle, RAM busy | Expert weights spilled to system RAM | `nvidia-smi` util low, RAM high | Do not use that model for the local tier. |
+| Subagents return the same page | Query coalescing and `~/.hermes/cache/web/` | Identical queries in the log | Vary the query for evals. Do not invent a cache-disable flag that was not in the doc. |
+| Synthesis misses the middle of a paper | 15k head+tail extract | `[TRUNCATED]` footer | Page the on-disk file, or raise `web.extract_char_limit` and still treat the text as data. |
+| Planner returns 400 on tools | Gateway route does not accept `tools` | `scripts/test_tools.py --send` | Change ID or provider. Do not debug prompts first. |
+| `delegate_task` errors on a batch of 10 | Installed cap is 3, not 10 | The tool error names the cap | Read `delegation.max_concurrent_children`. Do not "fix" it by raising depth and width together. |
+| Agent runs shell from a research script | `execute_code` can call `terminal()` | Approval prompt, or no prompt if YOLO | §6. Docker backend, `strict` mode, approvals on. |
+| CUDA "no device" after a kernel upgrade | Arch rolling release, module not rebuilt | `nvidia-smi` fails | §9. DKMS driver, reboot, then confirm the llama.cpp backend is CUDA rather than Vulkan. |
 
 ---
 
-## 6. Traceability — what changed, and why
+## 9. Arch Linux
 
-Every deviation from the initial brief maps to a graded claim or verified finding in the analysis:
+The title is not decorative. This is the minimum that matches the Arch wiki page fetched
+2026-09-27, not a 2024 driver pin.
 
-| Brief passage | Analysis entry | Change applied in this file |
+The RTX 4090 is Ada Lovelace. The [NVIDIA wiki page](https://wiki.archlinux.org/title/NVIDIA)
+lists Ada as supported by `nvidia-open` (stock `linux`), `nvidia-open-lts`, or
+`nvidia-open-dkms` (any kernel), **or** the proprietary `nvidia-580xx-dkms` AUR package. Do
+not install the `.run` from NVIDIA's website; the wiki warns that it will not upgrade with
+the rest of the system. Do not pin "driver 555+" or "CUDA 12.6" from the review draft — those
+numbers are not what the current wiki says.
+
+```bash
+# Stock kernel. Use nvidia-open-dkms instead if you are not on the `linux` package.
+sudo pacman -S nvidia-open nvidia-utils
+nvidia-smi
+```
+
+After a kernel upgrade, a non-DKMS module breaks until it is rebuilt. If `nvidia-smi` fails,
+fix that before you touch models.
+
+**llama.cpp.** Hermes's managed runtime downloads its own engine. Prefer that unless you need
+flags it does not expose. For a manual build, Arch's `ggml` package is built with
+`-DGGML_CUDA=ON` (packaging discussion on the wiki talk page, 2026), but a Vulkan backend can
+still be the one that gets selected. The `llama.cpp-cuda` AUR package has been flagged
+out of date. Verify, do not assume:
+
+```bash
+nvidia-smi   # watch this during a short generate; util should leave 0%
+```
+
+If the GPU stays idle, you are on CPU or on a backend that is not actually running the model.
+Rebuild from [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) with `-DGGML_CUDA=ON`
+and confirm the log names CUDA. A venv (`python -m venv`) is the right place for any Python
+client; do not install those packages into the system interpreter.
+
+---
+
+## 10. Traceability
+
+### 10.1 From the brief, unchanged in substance
+
+| Brief | Analysis | This file |
 | --- | --- | --- |
-| †1 "Parallel/xAI routing … through Grok" | F8 ❌ | Split into two backends; xAI opt-in, search-only, LLM-generated results + don't-cite-blind caveat (§2.2) |
-| Keyless ring as zero-setup default | F5 ✅ + analysis §4 | Kept, repositioned as last-resort failover; keyed-provider-first ladder (§2.2) |
-| SearXNG as an installable "air-gapped" skill | F9 ⚠️ | First-class built-in backend; skill = optional fallback; search-only; not air-gapped (§2.2) |
-| — (not in brief) | analysis §4 | Extract budget (`web.extract_char_limit` 15,000), query coalescing, `~/.hermes/cache/web/` caching (§2.3) |
-| "Deep Research is Hermes's multi-step research mode" | F10 ⚠️ | Reframed: no named mode; compose from native features + community skill (§3) |
-| NotebookLM as a Hermes capability | F13 ⚠️ | Labelled third-party browser-automation MCP with fallback advice (§3) |
-| Default subagent fan-out | F11 ✅ + analysis §7 | Docs 3-vs-10 contradiction flagged; check `delegation.max_concurrent_children` (§3) |
-| †2 "Qwen3-Coder 32B Instruct … 71.4% SWE-bench" | M9 ❌ | **Deleted** — model does not exist; real 30B-A3B = 50.3–51.6%; replaced as headline by Qwen3.8-27B (§4.2, §4.3) |
-| †3 Llama 3.3 70B IQ2_XXS "usable" fallback | M14 ❌ | **Deleted** — 20 GiB KV + ~21–23 GB weights cannot fit fully on-GPU at 64K, at any weight quantisation; RAM-offload crawl acknowledged but not a usable fallback (§4.1, §4.3) |
-| †4 "The current public family covers four sizes from 14B to 405B" | M1 ⚠️ (+ M2 ✅) | Blur flagged: the "family" is two release generations — Hermes 4 (14B/70B/405B, Aug 2025) and Hermes 4.3 (36B, Dec 2025, Psyche) — now stated explicitly (§4.3) |
-| †4 "nearly matches the 70B at half the VRAM" | M3 ⚠️ | Qualified — breaks exactly at the 64K window (§4.3) |
-| RefusalBench 74.6% vs 59.5% | M7 ⚠️ | Like-for-like restated: 74.60 vs 49.07 (both non-reasoning) (§4.3) |
-| †6 Hermes 4.3 36B fit verdict | M4/M5 ✅ | **Kept and quantified**: ~39 GB at 64K; 2×24 GB or 80 GB card — scoped as on-GPU, with the RAM-spill caveat (§4.3) |
-| "Claude Opus still leads" | M8 ⚠️ | Softened to "at or near the frontier"; generation gap hard, rank order soft (§4.3) |
-| Gemma 4 26B-A4B "~85 tok/s" | M10 ⚠️ | Corrected to measured 149–194 tok/s; kept as throughput pick (§4.2) |
-| Qwen 3.6 27B "best dense reasoning" | M11 ⚠️ + analysis §4 | **Superseded by Qwen3.8-27B** (AA 52 vs 38, same footprint) (§4.2) |
-| gpt-oss-20B "cleanest tool calls" | M12 ⚠️ | Kept for headroom only; age flagged (13 months) (§4.2) |
-| "Ollama loses 10–15%"; TensorRT-LLM | M13 ⚠️ | Central estimate 2–8%; TensorRT-LLM dropped (not in Hermes docs); Ollama `num_ctx` trap added (§4.4) |
-| Custom-endpoint wiring ("Set via Hermes's native custom-endpoint path") | M15 ✅ | **Kept verbatim** — `provider: custom`, `/model custom` auto-detect (§4.4) |
-| Managed-runtime quantization policy | analysis §3.3 | Corrected: ≥4-bit policy, RAM spill is supported (§4.4) |
-| †5 Hermes 4 405B as planner | analysis §3.4 | **Replaced** — weak agentic panel; pick a current frontier/frontier-adjacent tool-calling model; Hermes lineage demoted to escape hatch (§5, step 2) |
-| Embedding sidecar via `auxiliary: session_search` | M16 ⚠️ | Memory-provider plugins + local embedding endpoint; auxiliary slot = check-your-version (§5, step 4) |
-| "Start local-only; add planner when quality plateaus" | M18 + analysis §6, item 6 | Sequencing inverted: validate the planner path early (§5, step 5) |
+| Parallel/xAI as one Grok route | F8 ❌ | Still split. xAI citation caveat re-checked. "Not in auto-detect" not re-confirmed (§2.2). |
+| Keyless ring as the plan | F5 ✅ | Still failover. Ring members re-checked. |
+| SearXNG as an air-gapped skill | F9 ⚠️ | Still search-only, not air-gapped. Now also a binding/privacy note (§6). |
+| "Deep Research" as a mode | F10 ⚠️ | Still composed. Docs index has no such product page. |
+| Qwen3-Coder 32B / 71.4% SWE-bench | M9 ❌ | Still deleted. Not re-404'd this pass. |
+| Llama 3.3 70B IQ2_XXS fallback | M14 ❌ | Still deleted. |
+| Hermes 4 405B as planner | analysis §3.4 | Still rejected. Price and AA mirror re-checked on OpenRouter. AA run page not re-fetched. |
+| Start local-only; add planner later | M18 advisory | Still inverted, and **labeled advisory** so it is not smuggled in as a scored fix. |
 
-*Not reproduced from the brief:* the 22/7/4-era framing of "August 2026 picks" superlatives ("best
-overall", "best dense reasoning model") — subjective, unscored in the analysis, and excluded here by the
-same standard.
+### 10.2 What PR #4 required, and what this revision did
 
----
-
-## 7. Re-check before acting — the full residual list
-
-*Every residual-uncertainty item from analysis §7 is ported below, plus two added for this file's own
-recommendations (model freshness, the auxiliary-slot version check). One analysis item is deliberately
-not carried over — stated at the bottom rather than dropped silently. **Critical review 2026-09-27 adds 5 more checks at the end.***
-
-- [ ] **Local-model freshness** — the tier moves on a ~6-week clock; confirm Qwen3.8-27B is still the
-      best 24 GB pick (and whether anything newer has displaced it) before downloading.
-- [ ] **Managed-runtime certification** — whether Hermes's catalog certifies Qwen3.8-27B / Gemma 4
-      26B-A4B at ≥64K on *your* card + driver: Settings → Providers → Local Models.
-- [ ] **Subagent fan-out** — the docs self-contradict (3 vs 10); check `delegation.max_concurrent_children`
-      on your build.
-- [ ] **Gateway tool support** — send one live request to confirm your cloud route accepts `tools` before
-      building the planner tier on it (the OpenRouter page self-contradicts).
-- [ ] **Throughput figures** — all 4090 tok/s numbers here are community reports, varying up to ~2× with
-      context depth, quantisation and runtime build. Measure on your box.
-- [ ] **"Qwen3-Coder-Next 30B Flash"** — still unconfirmed by any primary source as of 2026-09-26;
-      revisit only if it appears on the official Qwen3-Coder repo.
-- [ ] **`auxiliary.session_search`** — verify the slot still exists on your installed Hermes version
-      before wiring the embedding sidecar.
-- [ ] **Frontier rankings are index- and effort-dependent** — the §5, step 2 panel is mirrored AA data
-      (index revised v4.1 → v4.3.x; effort settings move scores substantially) and shifts weekly. Treat
-      rank ordering as soft, the generation gap as hard, and re-pull the numbers before quoting them.
-- [ ] **Qwen3.8-27B KV basis** — §4.1's row blends computed geometry with a measured ~2.3 GB per 32K;
-      the two methods agree closely, but if you re-derive fit numbers, note they are different methods.
-- [ ] **CRITICAL REVIEW — Framework existence** — `curl -I https://hermes-agent.nousresearch.com/docs/llms.txt` and `gh repo view NousResearch/hermes-agent`. If 404/DNS fail, stop — F1-F6 are circular.
-- [ ] **CRITICAL REVIEW — Model existence** — `python scripts/check_model_existence.py` — confirm Qwen3.8-27B and Gemma 4 26B-A4B return 200 on HF API. If missing, treat as candidate not confirmed.
-- [ ] **CRITICAL REVIEW — KV arithmetic** — `python scripts/kv_cache.py --layers 16 --kv-heads 4 --head-dim 256 --ctx 65536` and compare to §4.1. Note DeltaNet assumption.
-- [ ] **CRITICAL REVIEW — Security** — audit `execute_code` sandbox, MCP browser automation credentials, community skill commit SHAs, and web_extract prompt-injection guard.
-- [ ] **CRITICAL REVIEW — Cost** — measure local power + amortized GPU vs API cost for your daily research volume; do not assume hybrid is cheaper.
-
-*Deliberately not carried over from analysis §7: the minor Hermes 4.3 date discrepancy (GGUF repo commit
-dates ≈ Nov 2025 vs the Nous blog's December 2025) — the blog date is treated as authoritative, and no
-action in this file depends on it.*
+| Review item | Disposition |
+| --- | --- |
+| 1. Hermes docs might be circular | **Resolved for 2026-09-27.** Repo and docs index both responded. No WARC and no HTML body hash — a SHA pin of the docs HTML was not produced. If the origin 404s later, the resolution expires. |
+| 2. Qwen3.8 / Gemma 4 might be the next hallucinated names | **Resolved as existence.** Both Hub repos and `config.json` files were fetched. **Not resolved as "best."** AA 52 vs 38 withdrawn. |
+| 3. KV math hides DeltaNet and mixes units | **Addressed.** DeltaNet state estimated, not zero. Gemma fit verdict withdrawn and replaced with a derived range. Script presets match §4.1. |
+| 4. "Safe to act on" | **Stays removed.** |
+| 5. New claims unscored; superlatives snuck back in | Load-bearing new claims are labeled re-checked or carried. Role names are marked judgment. "Best local pick" is not used. |
+| 6. Rubric subjectivity | Not re-graded. This file does not emit a new 17/13/3. |
+| 7. Planner was "frontier-adjacent" | **Addressed.** Four named IDs, vendor URLs, list prices, and `scripts/test_tools.py`. |
+| 8. No Arch steps | **Addressed** in §9, from the current wiki, not from the review's driver pin. |
+| 9. Cost hand-waving | **Addressed** as formulas plus labeled examples. Hybrid savings explicitly unmeasured. |
+| 10. Tier-2 sources used as primary | §11 splits tiers. Blog-only figures (AA 52, 149 tok/s, 160M tokens, 2.3 GB/32K) are withdrawn. |
+| 11. No failure modes | §8. |
+| 12. Licence and low-refusal ethics | Licence column in §4.2. Escape-hatch note in §4.3. |
+| 13. No freshness command | §12. The existence script no longer treats a TLS error as "model does not exist." |
+| 14. AA 52 vs 38 might be mis-attributed | **Withdrawn** rather than re-defended. Vendor-card comparisons are labeled vendor-reported. The 405B panel is labeled as an OpenRouter mirror, index version unpinned. |
 
 ---
 
-*Provenance: derived from `initial-agent-research.md` (the workflow structure and all claims that
-verified) and `claim-verification-analysis.md` v2 (every correction, qualification and new finding;
-sources with URLs and access dates live there in analysis §8). **Additions in this branch** (§5.1, critical review banner, scripts) are new concerns from `CRITICAL_REVIEW.md` (2026-09-27) and diverge intentionally — they do not claim to be verified against primary sources, but to require verification before acting.*
+## 11. Sources
+
+Access date for every row fetched this pass: **2026-09-27**. No HTML body hashes. No WARC.
+
+### Tier 1 — used for a claim in this file
+
+| Claim | URL |
+| --- | --- |
+| Framework exists; installer; command names | https://github.com/NousResearch/hermes-agent |
+| Docs index | https://hermes-agent.nousresearch.com/docs/llms.txt |
+| ≥64K, 4-bit floor, RAM spill, managed runtime | https://hermes-agent.nousresearch.com/docs/user-guide/local-models |
+| Backends, keyless ring, 15k extract, coalescing, xAI caveat | https://hermes-agent.nousresearch.com/docs/user-guide/features/web-search |
+| `execute_code` host process, scrubbing, limits | https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution |
+| Approvals, YOLO, container isolation | https://hermes-agent.nousresearch.com/docs/user-guide/security |
+| Delegation cap contradiction (overview vs config vs guide) | https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation and the configuration / overview pages as returned by docs search |
+| Qwen3.8-27B existence, SHA, licence, template, geometry | https://huggingface.co/Qwen/Qwen3.8-27B and its `config.json` |
+| Gemma 4 26B-A4B existence, card, geometry, Apache 2.0 text | https://huggingface.co/google/gemma-4-26B-A4B-it and https://ai.google.dev/gemma/apache_2 |
+| gpt-oss-20b announcement | https://openai.com/index/introducing-gpt-oss/ |
+| Hermes 4 405B price and mirrored AA panel | https://openrouter.ai/nousresearch/hermes-4-405b |
+| Claude planner IDs and prices | https://platform.claude.com/docs/en/models/overview |
+| OpenAI planner IDs and prices | https://developers.openai.com/api/docs/models |
+| Gemini 3.8 Flash ID, function calling, intro price | https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash and https://ai.google.dev/gemini-api/docs/latest-model |
+| Arch driver packages | https://wiki.archlinux.org/title/NVIDIA |
+
+### Tier 2 — file listing or community quant, not a benchmark
+
+| Item | URL | Used for |
+| --- | --- | --- |
+| Unsloth Qwen3.8 GGUF sizes | https://huggingface.co/unsloth/Qwen3.8-27B-GGUF | File sizes only. Not tok/s, not quality. |
+
+### Not used, on purpose
+
+`codersera.com`, `kingy.ai`, `quesma.com`, `atomic.chat`, `benchlm.ai`, `modelgrep.com`,
+`morphllm.com`, and the practitioner blog that declared `auxiliary.session_search` removed.
+Those were the inputs to the previous edition's volatile numbers. They are not cited here.
+
+### Carried, not re-fetched
+
+Analysis §8 remains the trail for Hermes 4.3 file sizes, Seed-OSS geometry, Llama geometry,
+Qwen3-Coder-30B-A3B SWE-bench, the Ollama `num_ctx` trap, and issue #53347. If you act on one
+of those, open the URL in analysis §8 first.
+
+---
+
+## 12. Checklist
+
+Run this before a download or a subscription. A TLS error is not a 404.
+
+- [ ] **Origin still up.** `curl -fsSL -o /dev/null -w '%{http_code}\n' https://hermes-agent.nousresearch.com/docs/llms.txt` returns 200. If it does not, stop.
+- [ ] **Hub SHA.** `python scripts/check_model_existence.py` — transport errors print as transport errors. A missing `Qwen/Qwen3.8-27B` or a SHA other than `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0` means re-read §4 before downloading.
+- [ ] **KV.** `python scripts/kv_cache.py --preset qwen3.8-27b` and `--preset gemma4-26b-a4b`. Compare to §4.1. Then trust the runtime badge over the script.
+- [ ] **Catalog badge.** Settings → Providers → Local Models, on your driver. Green means on-GPU. Amber means a crawl. Red means pick another weight.
+- [ ] **Reasoning effort.** Confirm the local server is not silently on `xhigh` for extraction legs.
+- [ ] **Delegation cap.** Print `delegation.max_concurrent_children`. Do not assume 3 or 10.
+- [ ] **Planner tool call.** `python scripts/test_tools.py --provider <anthropic|openai|gemini> --model <id>` then the same with `--send` and the key in the environment. A 400 on `tools` ends that candidate.
+- [ ] **Prices.** Re-open the three vendor pages in §11. Gemini's intro rate ends 2026-12-31.
+- [ ] **Approvals.** `approvals.mode` is `smart` or `manual`. YOLO is off. `code_execution.mode` is `strict` unless you need project imports.
+- [ ] **Arch.** `nvidia-smi` works after the latest kernel. A short generate moves GPU util off zero.
+- [ ] **Do not revive** Qwen3-Coder 32B, Llama 3.3 70B as an on-GPU 64K fallback, or Hermes 4 405B as the planner.
+
+*Deliberately not carried from analysis §7: the Hermes 4.3 commit-date vs blog-date discrepancy. Nothing here depends on it.*
+
+---
+
+*This revision supersedes the disclaimer draft that PR #4 left in this file. The review's
+concerns are the source of the new sections; the primary pages in §11 are the source of the
+claims. Where those disagree with the review — framework existence, model existence, the
+`execute_code` threat model — the fetched page wins, and the disagreement is named in §10.2.*
