@@ -178,15 +178,17 @@ scales** — so quantised KV figures are lower bounds on the cache, not allocato
 GGUF file sizes below are decimal GB as listed on Hugging Face. llama.cpp and `nvidia-smi`
 account in GiB. This file converts only when it sums, and shows both.
 
-`python scripts/kv_cache.py --preset <name>` reproduces the rows. The script's fit line is a
-weights+cache sum. It does **not** include the vision projector, CUDA context, or compute
+`python scripts/kv_cache.py --preset <name>` reproduces the rows. Add `--weights-gb <file size>`
+for a fit line: a weights+cache sum, decimal GB converted to GiB. `--config config.json` counts
+only `full_attention` layers in the growing cache when the config has `layer_types`, and adds the
+linear-layer state from the config's `linear_*` fields. The fit line It does **not** include the vision projector, CUDA context, or compute
 buffers. The managed runtime's green/amber/red badge includes those. That badge is the fit
 check that counts; this section is the pre-download estimate.
 
 | Model | What was fetched | KV at 64K, fp16 | Basis |
 | --- | --- | --- | --- |
 | Qwen3.8-27B | Official `config.json` and model card | **4.00 GiB** (4.295 GB) from full attention only | **Derived.** 16 full-attention layers × 4 KV heads × 256 × 2 bytes × 2. Exactly 64 KiB/token. |
-| Qwen3.8-27B linear layers | Same config: 48 `linear_attention` layers, `mamba_ssm_dtype=float32` | **Not zero.** Fixed state, estimated **0.15 GiB**, does not grow with context | **Derived estimate, not measured.** Recurrent state assumed `48 v_heads × 128 × 128 × 4` bytes per layer (3.0 MiB × 48 = 0.141 GiB) plus a conv state of ~6 MiB. Wrong shape would change this term, not the 4 GiB term. |
+| Qwen3.8-27B linear layers | Same config: 48 `linear_attention` layers, `mamba_ssm_dtype=float32` | **Not zero.** Fixed state, estimated **0.15 GiB**, does not grow with context | **Derived estimate, not measured.** Recurrent state assumed `48 v_heads × 128 × 128 × 4` bytes per layer (3.0 MiB × 48 = 0.141 GiB) plus a conv state of ~7.5 MiB (`48 × 4 × 10240 × 4` bytes; Gated DeltaNet convolves Q, K and V, so channels are `2 × 16 × 128 + 48 × 128`). Wrong shape would change this term, not the 4 GiB term. |
 | Gemma 4 26B-A4B | Official `config.json` and model card | **0.72–1.45 GiB combined** at 64K, the range `scripts/kv_cache.py --preset gemma4-26b-a4b` prints | **Derived range.** Sliding ~0.10–0.20 GiB (window-capped) plus global 0.625 GiB if K=V are unified, 1.25 GiB if they are not. The old "~small / 17.5 GiB at 32K / 192K in 20.9 GB" fit verdict is **withdrawn**. |
 | Hermes 4.3 36B | Not re-fetched | 16 GiB if geometry is 64 × 8 × 128 | **Carried** from the Seed-OSS-36B config cited in analysis §8. |
 | Llama 3.3 70B | Not re-fetched | 20 GiB if geometry is 80 × 8 × 128 | **Carried.** Enough, with any serious 70B quant, to rule out a fully on-GPU 64K path. |
@@ -221,7 +223,7 @@ on that `main` listing — do not assume it is still published. 16.5 GB decimal 
 | --- | --- |
 | Unsloth `UD-Q4_K_M` on `main` (16.5 GB decimal) | 15.37 |
 | Full-attention KV, 64K, fp16 | 4.00 |
-| Linear-layer state (estimate, 0.147 GiB in the script) | 0.15 |
+| Linear-layer state (estimate, 0.148 GiB in the script) | 0.15 |
 | **Sum, before projector and buffers** | **19.5** |
 | Headroom vs 24 GiB, before those extras | ~4.5 |
 
@@ -595,11 +597,11 @@ Hub request never gets a 404: a missing repo is a **401 `Invalid username or pas
 - [ ] **Origin still up.** `curl -fsSL -o /dev/null -w '%{http_code}\n' https://hermes-agent.nousresearch.com/docs/llms.txt` returns 200. If it does not, stop.
 - [ ] **Hub SHA.** `python scripts/check_model_existence.py` (optionally with `HF_TOKEN` set) — exit 0 is the pass. Transport errors print as `INCOMPLETE`, exit 2; retry. A missing recommended id, or a SHA that moved off its 2026-09-27 pin (Qwen3.8-27B `1d4bf0f2…`, Gemma 4 `4d7ae498…`, gpt-oss-20b `6cee5e81…`, Qwen3-Coder-30B-A3B `b2cff646…`, Hermes-4-405B `88e3dce0…`), exits 1: re-read §4 before downloading. A moved SHA is a changed card, not a hallucination.
 - [ ] **Scripts self-test.** `python -m unittest discover -s tests` passes offline. It pins the §4.1 numbers and the status classification above; if it fails, the scripts and this file have drifted apart.
-- [ ] **KV.** `python scripts/kv_cache.py --preset qwen3.8-27b` and `--preset gemma4-26b-a4b`. Compare to §4.1. Then trust the runtime badge over the script.
+- [ ] **KV.** `python scripts/kv_cache.py --preset qwen3.8-27b --weights-gb <file size from the listing>` and `--preset gemma4-26b-a4b`. Compare to §4.1. For the file you actually downloaded, `--config <its config.json>`. Then trust the runtime badge over the script.
 - [ ] **Catalog badge.** Settings → Providers → Local Models, on your driver. Green means on-GPU. Amber means a crawl. Red means pick another weight.
 - [ ] **Reasoning effort.** Confirm the local server is not silently on `xhigh` for extraction legs.
 - [ ] **Delegation cap.** Print `delegation.max_concurrent_children`. Do not assume 3 or 10.
-- [ ] **Planner tool call.** `python scripts/test_tools.py --provider <anthropic|openai|gemini> --model <id>` then the same with `--send` and the key in the environment. A 400 on `tools` ends that candidate.
+- [ ] **Planner tool call.** `python scripts/test_tools.py --provider <anthropic|openai|gemini> --model <id>` then the same with `--send` and the key in the environment. Exit 0 means a structured `add(a=2, b=3)` call came back; exit 1 means the route answered without making it (a 400 on `tools` ends that candidate); exit 2 means the probe did not complete (no key, 401/403/429/5xx, transport) — fix that and rerun, it is not a verdict on tools.
 - [ ] **Prices.** Re-open the three vendor pages in §11. Gemini's intro rate ends 2026-12-31.
 - [ ] **Approvals.** `approvals.mode` is `smart` or `manual`. YOLO is off. `code_execution.mode` is `strict` unless you need project imports.
 - [ ] **Arch.** `nvidia-smi` works after the latest kernel. A short generate moves GPU util off zero.

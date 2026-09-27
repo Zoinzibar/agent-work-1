@@ -14,10 +14,12 @@ Usage:
   python scripts/kv_cache.py --preset gemma4-26b-a4b
   python scripts/kv_cache.py --layers 80 --kv-heads 8 --head-dim 128 --ctx 65536
   python scripts/kv_cache.py --config path/to/config.json --ctx 65536
+  python scripts/kv_cache.py --preset qwen3.8-27b --weights-gb 16.5   # adds a fit line
 """
 import argparse
 import json
 import sys
+from collections import Counter
 
 DTYPE_BYTES = {
     "fp16": 2.0,
@@ -45,7 +47,9 @@ PRESETS = {
             "v_dim": 128,
             "dtype_bytes": 4,  # mamba_ssm_dtype = float32
             "conv_kernel": 4,
-            "conv_channels": 16 * 128 + 48 * 128,
+            # Gated DeltaNet convolves Q, K and V together:
+            # 2 * (16 key heads * 128) + 48 value heads * 128 = 10240 channels.
+            "conv_channels": 2 * 16 * 128 + 48 * 128,
         },
     },
     "gemma4-26b-a4b": {
@@ -116,7 +120,8 @@ def print_standard(layers, kv_heads, head_dim, ctx, dtype, dtype_bytes, k_and_v=
     return total
 
 
-def print_qwen_linear(state):
+def linear_state_bytes(state):
+    """(recurrent, conv) bytes for a Gated DeltaNet style fixed state. Pure function."""
     recurrent = (
         state["layers"]
         * state["v_heads"]
@@ -125,6 +130,44 @@ def print_qwen_linear(state):
         * state["dtype_bytes"]
     )
     conv = state["layers"] * state["conv_kernel"] * state["conv_channels"] * state["dtype_bytes"]
+    return recurrent, conv
+
+
+def linear_state_from_config(text, n_linear):
+    """Build a linear_state dict from a Qwen3.5-style text_config, or None if fields are absent."""
+    keys = ("linear_num_key_heads", "linear_num_value_heads", "linear_key_head_dim", "linear_value_head_dim")
+    if n_linear <= 0 or any(text.get(k) is None for k in keys):
+        return None
+    k_heads, v_heads = text["linear_num_key_heads"], text["linear_num_value_heads"]
+    k_dim, v_dim = text["linear_key_head_dim"], text["linear_value_head_dim"]
+    dtype_bytes = 4 if str(text.get("mamba_ssm_dtype", "float32")) == "float32" else 2
+    return {
+        "layers": n_linear,
+        "v_heads": v_heads,
+        "k_dim": k_dim,
+        "v_dim": v_dim,
+        "dtype_bytes": dtype_bytes,
+        "conv_kernel": text.get("linear_conv_kernel_dim", 4),
+        "conv_channels": 2 * k_heads * k_dim + v_heads * v_dim,
+    }
+
+
+def print_fit(weights_gb, cache_bytes, vram_gib):
+    """Weights (decimal GB, as Hugging Face lists files) + cache, in GiB, against a VRAM budget."""
+    weights_gib = weights_gb * 1000 ** 3 / 1024 ** 3
+    cache_gib = cache_bytes / 1024 ** 3
+    total = weights_gib + cache_gib
+    print(f"\nFit estimate (weights + cache/state only):")
+    print(f"  weights {weights_gb} GB decimal = {weights_gib:.2f} GiB")
+    print(f"  cache/state = {cache_gib:.2f} GiB")
+    print(f"  sum = {total:.2f} GiB of {vram_gib} GiB -> headroom {vram_gib - total:.2f} GiB before buffers")
+    if total > vram_gib:
+        print("  DOES NOT FIT before projector, CUDA context and compute buffers are even counted.")
+    return total
+
+
+def print_qwen_linear(state):
+    recurrent, conv = linear_state_bytes(state)
     print("\nLinear-attention state (estimate, NOT measured, does not grow with context):")
     print(
         f"  assumed recurrent: {state['layers']} layers * {state['v_heads']} v_heads * "
@@ -163,8 +206,10 @@ def print_gemma(preset, ctx, dtype, dtype_bytes):
     print(f"  bytes/token: {g_bpt:.0f} = {g_bpt / 1024:.1f} KiB")
     print(f"  at {ctx} tokens: {fmt(g_total)}")
     print(f"  if NOT unified (factor 2): {fmt(g_total * 2)}")
-    print(f"\nRange at this context, before weights and buffers: {fmt(slide_total * 0.5 + g_total)} to {fmt(slide_total + g_total * 2)}")
+    low, high = slide_total * 0.5 + g_total, slide_total + g_total * 2
+    print(f"\nRange at this context, before weights and buffers: {fmt(low)} to {fmt(high)}")
     print("Do not add a blog GGUF size to this range and call the sum measured.")
+    return low, high
 
 
 def main(argv=None):
@@ -175,65 +220,90 @@ def main(argv=None):
     p.add_argument("--head-dim", type=int)
     p.add_argument("--ctx", type=int, default=65536)
     p.add_argument("--dtype", default="fp16", choices=list(DTYPE_BYTES))
-    p.add_argument("--config", help="path to config.json (full-attention fields only)")
+    p.add_argument("--config", help="path to config.json (reads text_config if present)")
     p.add_argument(
         "--full-attn-only",
         type=int,
-        help="if --config is a hybrid model, use this many full-attention layers",
+        help="override the number of full-attention layers counted in the growing cache",
     )
+    p.add_argument(
+        "--weights-gb",
+        type=float,
+        help="GGUF file size in decimal GB as listed on Hugging Face; prints a weights+cache fit line",
+    )
+    p.add_argument("--vram-gib", type=float, default=24.0, help="VRAM budget for the fit line (default 24)")
     args = p.parse_args(argv)
     dtype_bytes = DTYPE_BYTES[args.dtype]
+
+    def finish(cache_bytes):
+        if args.weights_gb is not None:
+            print_fit(args.weights_gb, cache_bytes, args.vram_gib)
+        return 0
 
     if args.preset:
         preset = PRESETS[args.preset]
         print(f"Preset: {args.preset}")
         if "sliding" in preset:
-            print_gemma(preset, args.ctx, args.dtype, dtype_bytes)
-            return
+            _, high = print_gemma(preset, args.ctx, args.dtype, dtype_bytes)
+            if args.weights_gb is not None:
+                print("(fit line uses the HIGH end of the range)")
+            return finish(high)
         print(f"Source: {preset['source']}")
         print(preset["note"])
         print()
-        print_standard(
+        total = print_standard(
             preset["full_layers"], preset["kv_heads"], preset["head_dim"],
             args.ctx, args.dtype, dtype_bytes,
         )
         if "linear_state" in preset:
-            print_qwen_linear(preset["linear_state"])
+            total += print_qwen_linear(preset["linear_state"])
         print("\nNot included: vision projector, CUDA context, compute buffers.")
         print("q8_0 / q4_0 figures ignore block scales, so they are slightly low.")
-        return
+        return finish(total)
 
     if args.config:
         with open(args.config) as f:
             cfg = json.load(f)
         text = cfg.get("text_config", cfg)
         layers = text.get("num_hidden_layers")
-        kv_heads = text.get("num_key_value_heads")
-        head_dim = text.get("head_dim") or (
-            text.get("hidden_size", 0) // text.get("num_attention_heads", 1)
-        )
+        kv_heads = text.get("num_key_value_heads") or text.get("num_attention_heads")
+        head_dim = text.get("head_dim")
+        if not head_dim and text.get("hidden_size") and text.get("num_attention_heads"):
+            head_dim = text["hidden_size"] // text["num_attention_heads"]
+        if None in (layers, kv_heads, head_dim):
+            p.error(
+                f"config is missing geometry (num_hidden_layers={layers}, "
+                f"num_key_value_heads={kv_heads}, head_dim={head_dim}); pass --layers/--kv-heads/--head-dim"
+            )
         print(f"Loaded config: layers={layers}, kv_heads={kv_heads}, head_dim={head_dim}")
-        layer_types = text.get("layer_types") or []
-        if layer_types:
-            from collections import Counter
-            counts = Counter(layer_types)
+        counts = Counter(text.get("layer_types") or [])
+        linear_state = None
+        if counts:
             print(f"layer_types: {dict(counts)}")
-            print("Hybrid configs: this path uses num_hidden_layers unless --full-attn-only is set.")
-            print("Prefer --preset qwen3.8-27b or --preset gemma4-26b-a4b for those models.")
+            if counts.get("sliding_attention"):
+                print("Sliding-window layers present. This path cannot model window caps or")
+                print("separate global geometry; use --preset gemma4-26b-a4b or treat this as an upper bound.")
+            if counts.get("full_attention") and not args.full_attn_only:
+                layers = counts["full_attention"]
+                print(f"Growing cache counts only the {layers} full_attention layers.")
+            linear_state = linear_state_from_config(text, counts.get("linear_attention", 0))
         if args.full_attn_only:
-            print(f"Using --full-attn-only={args.full_attn_only}. Linear/sliding layers are excluded from the growing cache.")
+            print(f"Using --full-attn-only={args.full_attn_only}.")
             layers = args.full_attn_only
         print()
-        print_standard(layers, kv_heads, head_dim, args.ctx, args.dtype, dtype_bytes)
-        return
+        total = print_standard(layers, kv_heads, head_dim, args.ctx, args.dtype, dtype_bytes)
+        if linear_state:
+            total += print_qwen_linear(linear_state)
+        return finish(total)
 
     if None in (args.layers, args.kv_heads, args.head_dim):
         p.error("Need --preset, or --layers --kv-heads --head-dim, or --config")
-    print_standard(args.layers, args.kv_heads, args.head_dim, args.ctx, args.dtype, dtype_bytes)
+    total = print_standard(args.layers, args.kv_heads, args.head_dim, args.ctx, args.dtype, dtype_bytes)
+    return finish(total)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except BrokenPipeError:
         sys.exit(0)

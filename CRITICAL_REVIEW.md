@@ -222,7 +222,7 @@ Without these, `updated-workflow.md` is *better* than the initial brief (it fixe
 
 ---
 
-## Concrete PR changes in this branch
+## Changes made through PR #4 and its follow-ups
 
 *As first submitted (commit `fddc2ef`):*
 
@@ -243,6 +243,11 @@ Without these, `updated-workflow.md` is *better* than the initial brief (it fixe
   404 anonymously, so the original "expect a 404" step could never pass); pins a SHA for every
   recommended id; honours `HF_TOKEN`.
 - `tests/test_scripts.py` — offline checks that the scripts still produce the numbers §4.1 quotes.
+
+*Cleanup pass (PR #7):* `kv_cache.py` Qwen conv-state channels corrected (Q, K and V, not K and V),
+`--config` made hybrid-aware (it previously counted all 64 Qwen3.8 layers, 16 GiB instead of 4),
+the `--weights-gb` fit line §4.1 already described now exists, `test_tools.py` parses the
+provider's tool-call structure instead of substring-matching, and CI runs the self-test.
 
 The 2026-09-26 draft that this review annotated is no longer in the tree. The review stands as
 the record of *why* the rewrite happened.
