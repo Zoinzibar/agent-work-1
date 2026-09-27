@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local secrets — the probe scripts read keys from the environment, never from the tree
+.env
+.env.*
+
+# Bulky artefacts that must not land in this repo
+*.gguf
+*.safetensors
+*.warc
+*.warc.gz
+provenance/*.html
