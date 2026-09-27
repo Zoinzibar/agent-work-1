@@ -244,7 +244,7 @@ Without these, `updated-workflow.md` is *better* than the initial brief (it fixe
   recommended id; honours `HF_TOKEN`.
 - `tests/test_scripts.py` — offline checks that the scripts still produce the numbers §4.1 quotes.
 
-*Cleanup pass (PR #7):* `kv_cache.py` Qwen conv-state channels corrected (Q, K and V, not K and V),
+*Cleanup pass (PR #8):* `kv_cache.py` Qwen conv-state channels corrected (Q, K and V, not K and V),
 `--config` made hybrid-aware (it previously counted all 64 Qwen3.8 layers, 16 GiB instead of 4),
 the `--weights-gb` fit line §4.1 already described now exists, `test_tools.py` parses the
 provider's tool-call structure instead of substring-matching, and CI runs the self-test.
