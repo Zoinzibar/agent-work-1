@@ -10,10 +10,11 @@
   cards, `Seed-OSS-36B-Base` config, Qwen model cards, OpenRouter/Artificial Analysis data), with a
   scorecard, corrections, KV-cache arithmetic for the 64K context floor on a 24 GB card, a sourced
   reference list, and a corrected model/hardware stack.
-- [`updated-workflow.md`](updated-workflow.md) — the end product: the brief's setup workflow (native Web
-  Search + Deep Research on Hermes Agent / RTX 4090) rewritten with every correction from the analysis
-  applied. **This is the file to follow** — the two above are its audit trail. Includes a traceability
-  table (brief passage → analysis entry → change applied) and a re-check-before-acting checklist.
+- [`updated-workflow.md`](updated-workflow.md) — the workflow to follow, **revision 2026-09-27**.
+  It applies the corrections from the analysis and the open items from
+  [`CRITICAL_REVIEW.md`](CRITICAL_REVIEW.md) (PR #4), after a primary-source pass. It is **not**
+  an absolute "safe to act on" claim. Run its §12 checklist before downloading or subscribing.
+  [`provenance/2026-09-27.md`](provenance/2026-09-27.md) lists what was fetched and what was not.
 
 **Scorecard:** 33 scored claims → **17 verified as stated**, **13 verified with material qualification**,
 **3 incorrect** (plus 1 advisory row, not scored).
@@ -26,11 +27,11 @@
 3. **xAI and Parallel are different providers**, and xAI's search results are LLM-generated rather than
    index-backed.
 
-The framework half holds up (11 of 16 claims verified as stated), the hybrid local + cloud architecture
-survives, and the local model picks are corrected in §5 — now headlined by **Qwen3.8-27B**, which
-superseded the originally recommended Qwen3.6-27B six weeks before this verification ran.
+The framework half held up in the 2026-09-26 scorecard (11 of 16 claims verified as stated), and the
+hybrid local + cloud architecture still survives. The 2026-09-27 revision keeps Qwen3.8-27B as the
+default local *weight* only after confirming the Hub repo and `config.json` — and it withdraws the
+AA Index "52 vs 38" figure, which was not on the model card. Planner IDs are named vendor model IDs,
+not "frontier-adjacent".
 
-> ⏳ **Model claims verified 2026-09-26.** The local-model tier changed twice during authoring and review.
-> Before downloading anything, run the re-check checklist in [`updated-workflow.md`](updated-workflow.md) §7
-> — it consolidates the analysis's maintenance points (its §5/§6) for the file readers actually follow.
-> The framework and KV-cache sections are far more durable than the model picks.
+> ⏳ **Re-checked 2026-09-27, not frozen.** Before downloading anything, run
+> [`updated-workflow.md`](updated-workflow.md) §12. Model IDs and prices move faster than the KV formula.

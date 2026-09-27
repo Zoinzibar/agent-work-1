@@ -1,105 +1,117 @@
 #!/usr/bin/env python3
-"""
-Check if recommended local models actually exist on Hugging Face.
-This addresses second-order hallucination risk: Qwen3-Coder 32B did not exist,
-Qwen3.8-27B may not either.
+"""Check Hugging Face for the model IDs named in updated-workflow.md.
+
+A transport error is not a 404. The first version of this script printed TLS
+failures as "model missing / potential hallucination". That is fixed: only
+HTTP 404 counts as missing. Exit status is 0 if every lookup completed
+(missing models included), 2 if any lookup did not complete.
 
 Usage:
   python scripts/check_model_existence.py
-  python scripts/check_model_existence.py --models Qwen/Qwen3-30B-A3B,google/gemma-3-27b-it
-
-Requires: requests (pip install requests) or uses urllib fallback.
+  python scripts/check_model_existence.py --models Qwen/Qwen3.8-27B,google/gemma-4-26B-A4B-it
 """
-import sys
 import json
-try:
-    import requests
-    HAS_REQUESTS = True
-except ImportError:
-    HAS_REQUESTS = False
-    import urllib.request
-    import urllib.error
+import sys
+import urllib.error
+import urllib.request
 
-# Models claimed in updated-workflow.md §4.2 + analysis §5
-MODELS_TO_CHECK = [
-    # Claimed as top picks
-    ("Qwen/Qwen3.8-27B", "Qwen3.8-27B ⭐ default pick - claimed 2026-08-14, 262K, Apache 2.0"),
-    ("google/gemma-4-26b-a4b-it", "Gemma 4 26B-A4B throughput pick - claimed Apr 2026"),
-    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Coder-30B-A3B - claimed real, 50.3% SWE-bench"),
-    ("openai/gpt-oss-20b", "gpt-oss-20B headroom pick - Aug 2025"),
-    ("Qwen/Qwen3-27B", "Qwen3 27B (Qwen3.6-27B superseded)"),
-    ("NousResearch/Hermes-4.3-36B", "Hermes 4.3 36B - Dec 2025, Psyche"),
-    ("NousResearch/Hermes-4-405B", "Hermes 4 405B planner - Aug 2025"),
-    # Known false from initial brief
-    ("Qwen/Qwen3-Coder-32B-Instruct", "Qwen3-Coder 32B Instruct - SHOULD NOT EXIST (M9 ❌)"),
-    # Reference
-    ("ByteDance-Seed/Seed-OSS-36B-Base", "Seed-OSS-36B-Base for KV geometry"),
-    ("meta-llama/Llama-3.3-70B-Instruct", "Llama 3.3 70B - for KV calc"),
+# (id, expect_exists, note)
+# expect_exists False means a 404 is the desired result (the known-false brief pick).
+MODELS = [
+    ("Qwen/Qwen3.8-27B", True, "default local weight; pin SHA 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 as of 2026-09-27"),
+    ("google/gemma-4-26B-A4B-it", True, "throughput candidate"),
+    ("openai/gpt-oss-20b", True, "headroom candidate"),
+    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", True, "carried fallback; not re-fetched in the 2026-09-27 writeup"),
+    ("NousResearch/Hermes-4-405B", True, "weights exist; still not the planner"),
+    ("Qwen/Qwen3-Coder-32B-Instruct", False, "brief headline pick; a 404 is the expected result (analysis M9)"),
 ]
 
-def check_model_hf(model_id):
+PINNED_SHA = {
+    "Qwen/Qwen3.8-27B": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+}
+
+UA = "agent-work-1-check/1.0 (existence check; not a scraper)"
+
+
+def lookup(model_id):
     url = f"https://huggingface.co/api/models/{model_id}"
-    if HAS_REQUESTS:
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                return True, data.get("sha"), data.get("lastModified")
-            else:
-                return False, r.status_code, None
-        except Exception as e:
-            return False, str(e), None
-    else:
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-                return True, data.get("sha"), data.get("lastModified")
-        except urllib.error.HTTPError as e:
-            return False, e.code, None
-        except Exception as e:
-            return False, str(e), None
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+            return {
+                "status": "exists",
+                "http": resp.status,
+                "sha": data.get("sha"),
+                "last_modified": data.get("lastModified"),
+                "private": data.get("private"),
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"status": "missing", "http": 404, "sha": None, "last_modified": None}
+        return {"status": "http_error", "http": e.code, "detail": str(e)}
+    except Exception as e:
+        return {"status": "transport_error", "http": None, "detail": f"{type(e).__name__}: {e}"}
+
 
 def main():
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--models", help="comma-separated HF model ids to check")
+    p.add_argument("--models", help="comma-separated HF ids; all are expected to exist")
     args = p.parse_args()
 
-    models = MODELS_TO_CHECK
     if args.models:
-        models = [(m.strip(), "custom") for m in args.models.split(",")]
+        rows = [(m.strip(), True, "custom") for m in args.models.split(",") if m.strip()]
+    else:
+        rows = MODELS
 
-    print(f"Checking {len(models)} models on Hugging Face API...\n")
-    print(f"{'Model ID':<45} {'Exists':<8} {'Note'}")
-    print("-"*120)
-    missing = []
-    exists = []
-    for model_id, note in models:
-        ok, extra, last_mod = check_model_hf(model_id)
-        status = "✅" if ok else "❌"
-        print(f"{model_id:<45} {status:<8} {note} ({extra})")
-        if ok:
-            exists.append(model_id)
+    print(f"Checking {len(rows)} Hugging Face model ids\n")
+    incomplete = []
+    unexpected = []
+    for model_id, expect_exists, note in rows:
+        result = lookup(model_id)
+        status = result["status"]
+        if status == "exists":
+            sha = result.get("sha") or ""
+            pin = PINNED_SHA.get(model_id)
+            pin_note = ""
+            if pin and sha and sha != pin:
+                pin_note = f"  SHA MOVED (pinned {pin})"
+                unexpected.append(model_id)
+            elif pin and sha == pin:
+                pin_note = "  SHA matches 2026-09-27 pin"
+            print(f"EXISTS   {model_id}")
+            print(f"         sha={sha} lastModified={result.get('last_modified')}{pin_note}")
+            if not expect_exists:
+                print("         UNEXPECTED: this id was supposed to 404")
+                unexpected.append(model_id)
+        elif status == "missing":
+            print(f"MISSING  {model_id}  HTTP 404")
+            if expect_exists:
+                print("         unexpected for a recommended id — do not download from memory")
+                unexpected.append(model_id)
+            else:
+                print("         expected (known-false id)")
         else:
-            missing.append((model_id, note))
+            print(f"INCOMPLETE  {model_id}  {status} {result.get('detail')}")
+            print("         not evidence of absence. Retry, or open the Hub URL in a browser.")
+            incomplete.append(model_id)
+        print(f"         {note}")
 
-    print("\n--- Summary ---")
-    print(f"Exists: {len(exists)}/{len(models)}")
-    print(f"Missing: {len(missing)}/{len(models)}")
-    if missing:
-        print("\nMissing models (potential hallucination):")
-        for mid, note in missing:
-            print(f"  - {mid}: {note}")
-        print("\n⚠️  If Qwen3.8-27B or Gemma 4 26B-A4B are missing, updated-workflow.md's top picks are unverified.")
-        print("    Treat them as CANDIDATE, not CONFIRMED, until primary HF repo appears.")
+    print("\n---")
+    print("Framework, not an HF model: curl -fsSL -o /dev/null -w '%{http_code}\\n' \\")
+    print("  https://hermes-agent.nousresearch.com/docs/llms.txt")
+    print("A non-200 there means stop. Do not treat this script's TLS errors as that signal.")
 
-    # Also check Hermes Agent framework existence
-    print("\n--- Framework existence checks (manual) ---")
-    print("These require manual curl -I, not HF API:")
-    print("  - https://hermes-agent.nousresearch.com/docs/llms.txt")
-    print("  - https://github.com/NousResearch/hermes-agent")
-    print("  - OpenRouter: https://openrouter.ai/nousresearch/hermes-4-405b")
-    print("\nIf hermes-agent.nousresearch.com returns 404/DNS fail, F1-F6 scorecard is circular.")
+    if incomplete:
+        print(f"\n{len(incomplete)} lookup(s) did not complete. Exit 2.")
+        return 2
+    if unexpected:
+        print(f"\n{len(unexpected)} id(s) did not match the expectation. Exit 1.")
+        return 1
+    print("\nAll lookups completed and matched expectations.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
