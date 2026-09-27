@@ -190,7 +190,7 @@ check that counts; this section is the pre-download estimate.
 | Gemma 4 26B-A4B | Official `config.json` and model card | **0.72–1.45 GiB combined** at 64K, the range `scripts/kv_cache.py --preset gemma4-26b-a4b` prints | **Derived range.** Sliding ~0.10–0.20 GiB (window-capped) plus global 0.625 GiB if K=V are unified, 1.25 GiB if they are not. The old "~small / 17.5 GiB at 32K / 192K in 20.9 GB" fit verdict is **withdrawn**. |
 | Hermes 4.3 36B | Not re-fetched | 16 GiB if geometry is 64 × 8 × 128 | **Carried** from the Seed-OSS-36B config cited in analysis §8. |
 | Llama 3.3 70B | Not re-fetched | 20 GiB if geometry is 80 × 8 × 128 | **Carried.** Enough, with any serious 70B quant, to rule out a fully on-GPU 64K path. |
-| Qwen3-Coder-30B-A3B | Not re-fetched | 6 GiB if geometry is 48 × 4 × 128 | **Carried.** |
+| Qwen3-Coder-30B-A3B | Hub API metadata only (existence, SHA `b2cff646`, apache-2.0). `config.json` not re-read. | 6 GiB if geometry is 48 × 4 × 128 | **Carried** geometry; **re-checked** existence. |
 
 **Qwen linear layers are not a free zero.** The previous edition assumed DeltaNet contributes
 0 KV. The growing cache is the full-attention term only — that part of the assumption matches
@@ -245,11 +245,15 @@ Role names are **judgments**. They are not "best", and they are not a leaderboar
 | Default local weight | [`Qwen/Qwen3.8-27B`](https://huggingface.co/Qwen/Qwen3.8-27B) | Apache 2.0, stated in the model-card frontmatter. [Card](https://huggingface.co/Qwen/Qwen3.8-27B). | Exists. SHA pinned above. 262,144 native context (card; 1,000,000 via YaRN is the card's claim). Tool-call template is in the tokenizer. Computed 64K cache fits beside a ~16–17 GB Q4 file with a few GiB before buffers. Newer than the other two local rows. | That it is the best 24 GiB model. AA Index 52 vs 38. Any tok/s number. That the managed catalog certifies it on your driver. Vendor card numbers (Terminal-Bench 2.1 73.0 vs 63.4 for Qwen3.6-27B; SWE-bench Pro 61.7 vs 53.5) are **vendor-reported, same table** — usable as a within-vendor comparison, not an independent ranking. |
 | Throughput candidate | [`google/gemma-4-26B-A4B-it`](https://huggingface.co/google/gemma-4-26B-A4B-it) | Apache 2.0 on the card; the linked licence page resolved to the Apache 2.0 text. Re-read it before production — Google's use-policy URL has moved before. | Card: 25.2B total, 3.8B active, 256K context, native function calling, hybrid attention. Active-parameter count is the *mechanism* reason to expect higher decode speed than a dense 27B. KV range above is small next to weights. | Measured tok/s. The old 149–194 tok/s figure is **withdrawn** from this file (community blog, not re-measured). A numeric on-GPU fit. Confirm the GGUF you download plus §4.1 before treating it as the faster swap-in. |
 | Headroom candidate | [`openai/gpt-oss-20b`](https://huggingface.co/openai/gpt-oss-20b) | Apache 2.0 ([OpenAI announcement](https://openai.com/index/introducing-gpt-oss/), 2025-08-05). | Vendor: 21B total / 3.6B active, 128K context, MXFP4 build "only requires 16 GB". That is a vendor memory claim, not a 64K measurement on a 4090. Leaves the most room for an embedding sidecar **if** the claim holds. | Quality. "Cleanest tool calls" was sentiment in the analysis and stays withdrawn. The model is 13 months old as of this revision. |
-| Only if you need that tool-call format | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | **Carried.** | Analysis M9: real SWE-bench Verified 50.3–51.6%, not 71.4%. 6 GiB fp16 KV at 64K is tight beside ~18 GB weights. | Not re-fetched. Do not quote the SWE-bench range as fresh. |
+| Only if you need that tool-call format | [`Qwen/Qwen3-Coder-30B-A3B-Instruct`](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct) | Apache 2.0 (Hub `license:` tag, re-read 2026-09-27). | Exists — SHA `b2cff646eb4bb1d68355c01b18ae02e7cf42d120`, last modified 2025-12-03. Analysis M9: real SWE-bench Verified 50.3–51.6%, not 71.4%. 6 GiB fp16 KV at 64K is tight beside ~18 GB weights. | Geometry and the SWE-bench range are **carried**, not re-read. Do not quote them as fresh. |
 
 **Withdrawn from the recommendation, not from history:** "Qwen3-Coder 32B Instruct" does not
-exist (analysis M9). It was not re-404'd this pass — the local existence script hit TLS errors,
-which are not 404s (§12). Do not plan on a "Qwen3-Coder-Next 30B Flash" either (analysis:
+exist (analysis M9). **Re-checked 2026-09-27:** the Hub API answers an anonymous request for
+`Qwen/Qwen3-Coder-32B-Instruct` with **HTTP 401 `Invalid username or password`** — that is
+how the Hub says "missing or private" without a token; it never returns a plain 404 to an
+anonymous caller (see [`provenance/2026-09-27.md`](provenance/2026-09-27.md)).
+`scripts/check_model_existence.py` now classifies that answer as missing instead of waiting
+for a 404 that cannot arrive. Do not plan on a "Qwen3-Coder-Next 30B Flash" either (analysis:
 unconfirmed). No Qwen 4 weights repo was confirmed this pass. Secondary writeups said Qwen 4
 was still in training on 2026-09-22; that is not a primary source. Re-query the Hub before you
 download.
@@ -512,7 +516,7 @@ client; do not install those packages into the system interpreter.
 | Keyless ring as the plan | F5 ✅ | Still failover. Ring members re-checked. |
 | SearXNG as an air-gapped skill | F9 ⚠️ | Still search-only, not air-gapped. Now also a binding/privacy note (§6). |
 | "Deep Research" as a mode | F10 ⚠️ | Still composed. Docs index has no such product page. |
-| Qwen3-Coder 32B / 71.4% SWE-bench | M9 ❌ | Still deleted. Not re-404'd this pass. |
+| Qwen3-Coder 32B / 71.4% SWE-bench | M9 ❌ | Still deleted. Hub API re-read 2026-09-27: anonymous not-found (401), see §4.2. |
 | Llama 3.3 70B IQ2_XXS fallback | M14 ❌ | Still deleted. |
 | Hermes 4 405B as planner | analysis §3.4 | Still rejected. Price and AA mirror re-checked on OpenRouter. AA run page not re-fetched. |
 | Start local-only; add planner later | M18 advisory | Still inverted, and **labeled advisory** so it is not smuggled in as a scored fix. |
@@ -533,7 +537,7 @@ client; do not install those packages into the system interpreter.
 | 10. Tier-2 sources used as primary | §11 splits tiers. Blog-only figures (AA 52, 149 tok/s, 160M tokens, 2.3 GB/32K) are withdrawn. |
 | 11. No failure modes | §8. |
 | 12. Licence and low-refusal ethics | Licence column in §4.2. Escape-hatch note in §4.3. |
-| 13. No freshness command | §12. The existence script no longer treats a TLS error as "model does not exist." |
+| 13. No freshness command | §12, plus `tests/` (offline, `python -m unittest discover -s tests`). The existence script no longer treats a TLS error as "model does not exist", classifies the Hub's anonymous 401 not-found correctly, pins a SHA for every recommended id, and honours `HF_TOKEN`. |
 | 14. AA 52 vs 38 might be mis-attributed | **Withdrawn** rather than re-defended. Vendor-card comparisons are labeled vendor-reported. The 405B panel is labeled as an OpenRouter mirror, index version unpinned. |
 
 ---
@@ -554,6 +558,7 @@ Access date for every row fetched this pass: **2026-09-27**. No HTML body hashes
 | Approvals, YOLO, container isolation | https://hermes-agent.nousresearch.com/docs/user-guide/security |
 | Delegation cap contradiction (overview vs config vs guide) | https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation and the configuration / overview pages as returned by docs search |
 | Qwen3.8-27B existence, SHA, licence, template, geometry | https://huggingface.co/Qwen/Qwen3.8-27B and its `config.json` |
+| Existence, revision SHA, `lastModified`, licence tag for all five recommended/carried ids and the known-false id (second pass, metadata only) | `https://huggingface.co/api/models/<id>` — rows listed in [`provenance/2026-09-27.md`](provenance/2026-09-27.md) |
 | Gemma 4 26B-A4B existence, card, geometry, Apache 2.0 text | https://huggingface.co/google/gemma-4-26B-A4B-it and https://ai.google.dev/gemma/apache_2 |
 | gpt-oss-20b announcement | https://openai.com/index/introducing-gpt-oss/ |
 | Hermes 4 405B price and mirrored AA panel | https://openrouter.ai/nousresearch/hermes-4-405b |
@@ -584,10 +589,12 @@ of those, open the URL in analysis §8 first.
 
 ## 12. Checklist
 
-Run this before a download or a subscription. A TLS error is not a 404.
+Run this before a download or a subscription. A TLS error is not a 404 — and an anonymous
+Hub request never gets a 404: a missing repo is a **401 `Invalid username or password`**.
 
 - [ ] **Origin still up.** `curl -fsSL -o /dev/null -w '%{http_code}\n' https://hermes-agent.nousresearch.com/docs/llms.txt` returns 200. If it does not, stop.
-- [ ] **Hub SHA.** `python scripts/check_model_existence.py` — transport errors print as transport errors. A missing `Qwen/Qwen3.8-27B` or a SHA other than `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0` means re-read §4 before downloading.
+- [ ] **Hub SHA.** `python scripts/check_model_existence.py` (optionally with `HF_TOKEN` set) — exit 0 is the pass. Transport errors print as `INCOMPLETE`, exit 2; retry. A missing recommended id, or a SHA that moved off its 2026-09-27 pin (Qwen3.8-27B `1d4bf0f2…`, Gemma 4 `4d7ae498…`, gpt-oss-20b `6cee5e81…`, Qwen3-Coder-30B-A3B `b2cff646…`, Hermes-4-405B `88e3dce0…`), exits 1: re-read §4 before downloading. A moved SHA is a changed card, not a hallucination.
+- [ ] **Scripts self-test.** `python -m unittest discover -s tests` passes offline. It pins the §4.1 numbers and the status classification above; if it fails, the scripts and this file have drifted apart.
 - [ ] **KV.** `python scripts/kv_cache.py --preset qwen3.8-27b` and `--preset gemma4-26b-a4b`. Compare to §4.1. Then trust the runtime badge over the script.
 - [ ] **Catalog badge.** Settings → Providers → Local Models, on your driver. Green means on-GPU. Amber means a crawl. Red means pick another weight.
 - [ ] **Reasoning effort.** Confirm the local server is not silently on `xhigh` for extraction legs.

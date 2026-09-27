@@ -167,7 +167,7 @@ def print_gemma(preset, ctx, dtype, dtype_bytes):
     print("Do not add a blog GGUF size to this range and call the sum measured.")
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="KV cache calculator for updated-workflow.md §4.1")
     p.add_argument("--preset", choices=sorted(PRESETS), help="named geometry from the workflow")
     p.add_argument("--layers", type=int)
@@ -181,7 +181,7 @@ def main():
         type=int,
         help="if --config is a hybrid model, use this many full-attention layers",
     )
-    args = p.parse_args()
+    args = p.parse_args(argv)
     dtype_bytes = DTYPE_BYTES[args.dtype]
 
     if args.preset:

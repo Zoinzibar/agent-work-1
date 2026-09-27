@@ -33,5 +33,16 @@ default local *weight* only after confirming the Hub repo and `config.json` — 
 AA Index "52 vs 38" figure, which was not on the model card. Planner IDs are named vendor model IDs,
 not "frontier-adjacent".
 
+### Scripts
+
+Small, dependency-free (`python3` stdlib only). The workflow's §12 checklist tells you when to run them.
+
+| Script | What it does | Network |
+| --- | --- | --- |
+| `scripts/kv_cache.py --preset <name>` | Reproduces the KV-cache rows in `updated-workflow.md` §4.1 from model geometry (`--config config.json` for your own). | none |
+| `scripts/check_model_existence.py` | Asks the Hugging Face API whether each recommended id still exists and whether its revision SHA moved off the 2026-09-27 pin. Exit 0 = pass, 1 = mismatch, 2 = a lookup did not complete. Reads `HF_TOKEN` if set. | Hub API |
+| `scripts/test_tools.py --provider … --model …` | Builds one minimal tool-call request for a named planner id; dry-run unless `--send`. | vendor API, only with `--send` |
+| `python -m unittest discover -s tests` | Offline self-test: the §4.1 numbers, the Hub status classification, and the probe's dry-run contract. | none |
+
 > ⏳ **Re-checked 2026-09-27, not frozen.** Before downloading anything, run
 > [`updated-workflow.md`](updated-workflow.md) §12. Model IDs and prices move faster than the KV formula.

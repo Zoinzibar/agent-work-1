@@ -5,6 +5,14 @@
 **Target:** `updated-workflow.md` (claimed "corrected edition", verified 2026-09-26)  
 **Context:** `initial-agent-research.md` (known-false brief) + `claim-verification-analysis.md` v2 + `README.md`
 
+> **Status (2026-09-27, later the same day).** This review is kept as written. It targets the
+> **2026-09-26 edition** of `updated-workflow.md`; section numbers below (§4.2, §5, §7 …) refer to
+> that edition, not the current file. The current `updated-workflow.md` is the revision that
+> applied this review after a primary-source pass — its **§10.2** gives an item-by-item
+> disposition of concerns 1–14, and [`provenance/2026-09-27.md`](provenance/2026-09-27.md)
+> lists what was actually fetched. Where a proposed fix below was *not* adopted (e.g. a WARC
+> bundle, `check_freshness.py`, a re-graded scorecard), §10.2 says so rather than pretending.
+
 > **TL;DR:** `updated-workflow.md` fixes the three outright false claims identified in v2 analysis, but it replaces them with new claims that inherit the *same failure modes* — volatile model names sourced from SEO blogs, unverified product existence, and arithmetic that looks precise but hides assumptions. It then declares itself "safe to act on", which is the most dangerous claim in the repo. This review lists 14 concerns and proposes concrete fixes.
 
 ---
@@ -216,12 +224,28 @@ Without these, `updated-workflow.md` is *better* than the initial brief (it fixe
 
 ## Concrete PR changes in this branch
 
+*As first submitted (commit `fddc2ef`):*
+
 - This file (`CRITICAL_REVIEW.md`) — the review itself.
-- `updated-workflow.md` — add disclaimer banner, security note, and TODO markers (see diff).
+- `updated-workflow.md` — disclaimer banner, security note, and TODO markers on top of the old draft.
 - `scripts/kv_cache.py` — reference implementation for KV cache calculation.
 - `scripts/check_model_existence.py` — HF API existence check for local models.
 
-These are minimal, non-destructive, and keep the original workflow intact while surfacing risks.
+*After the follow-ups merged into this PR (PR #5 and the pass that fixed the existence check):*
+
+- `updated-workflow.md` — **rewritten**, not annotated. Named planner IDs, KV presets derived from
+  fetched `config.json` files, security / cost / Arch / failure-mode sections, tiered sources, a
+  §12 checklist, and a §10.2 table answering each numbered concern above.
+- `provenance/2026-09-27.md` — what was fetched, with SHAs, and what was not.
+- `scripts/test_tools.py` — dry-run-by-default tool-call probe for the named planner IDs.
+- `scripts/check_model_existence.py` — no longer treats a TLS error as a 404; classifies the
+  Hub's anonymous **401 "Invalid username or password"** as *missing or private* (the Hub does not
+  404 anonymously, so the original "expect a 404" step could never pass); pins a SHA for every
+  recommended id; honours `HF_TOKEN`.
+- `tests/test_scripts.py` — offline checks that the scripts still produce the numbers §4.1 quotes.
+
+The 2026-09-26 draft that this review annotated is no longer in the tree. The review stands as
+the record of *why* the rewrite happened.
 
 ---
 

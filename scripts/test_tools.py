@@ -85,14 +85,14 @@ def gemini_request(model, base_url):
     return url, body, "GEMINI_API_KEY", "x-goog-api-key"
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="One tool-call probe. Dry-run by default.")
     p.add_argument("--provider", required=True, choices=["anthropic", "openai", "gemini"])
     p.add_argument("--model", required=True)
     p.add_argument("--base-url", default=None, help="override the vendor base URL")
     p.add_argument("--send", action="store_true", help="actually send; requires the env key")
     p.add_argument("--timeout", type=int, default=60)
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     defaults = {
         "anthropic": "https://api.anthropic.com",
