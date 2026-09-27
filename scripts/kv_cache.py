@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""KV-cache arithmetic used by updated-workflow.md §4.1.
+"""KV-cache arithmetic used by docs/workflow.md §4.1.
 
 Formula (full attention, separate K and V):
   bytes/token = 2 * layers * kv_heads * head_dim * bytes_per_element
 
-Presets match geometries fetched 2026-09-27, or geometries carried from the
-2026-09-26 analysis and labeled as such. This script does not allocate memory
-and does not include the vision projector, CUDA context, or compute buffers.
+Presets use geometries verified from config.json on 2026-09-27, or are
+labelled UNVERIFIED (see docs/sources.md, "Unverified leads"). This script
+does not allocate memory and does not include the vision projector, CUDA
+context, or compute buffers.
 The managed runtime's fit badge is the check that counts.
 
 Usage:
@@ -75,21 +76,21 @@ PRESETS = {
         },
     },
     "llama-3.3-70b": {
-        "source": "CARRIED from analysis, not re-fetched 2026-09-27",
+        "source": "UNVERIFIED geometry (last checked 2026-09-26)",
         "full_layers": 80,
         "kv_heads": 8,
         "head_dim": 128,
         "note": "Standard Llama 3.3 70B geometry. Confirm against config.json before quoting.",
     },
     "hermes-4.3-36b": {
-        "source": "CARRIED from Seed-OSS-36B config cited in analysis §8, not re-fetched",
+        "source": "UNVERIFIED: Seed-OSS-36B config geometry (last checked 2026-09-26)",
         "full_layers": 64,
         "kv_heads": 8,
         "head_dim": 128,
         "note": "Confirm against the installed model's config before quoting.",
     },
     "qwen3-coder-30b-a3b": {
-        "source": "CARRIED from analysis, not re-fetched 2026-09-27",
+        "source": "UNVERIFIED geometry (last checked 2026-09-26); repo existence verified",
         "full_layers": 48,
         "kv_heads": 4,
         "head_dim": 128,
@@ -213,7 +214,7 @@ def print_gemma(preset, ctx, dtype, dtype_bytes):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="KV cache calculator for updated-workflow.md §4.1")
+    p = argparse.ArgumentParser(description="KV cache calculator for docs/workflow.md §4.1")
     p.add_argument("--preset", choices=sorted(PRESETS), help="named geometry from the workflow")
     p.add_argument("--layers", type=int)
     p.add_argument("--kv-heads", type=int)

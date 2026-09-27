@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Send one trivial tool call to a planner route. Dry-run unless --send.
 
-updated-workflow.md §5: a marketing page that says "tools" is not enough.
+docs/workflow.md §5: a marketing page that says "tools" is not enough.
 This script asks the route to call `add`, with arguments 2 and 3. It does not
 browse, execute code, or read secrets. The API key is read from the
 environment and never printed.

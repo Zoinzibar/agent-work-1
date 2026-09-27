@@ -1,4 +1,4 @@
-"""Offline checks for the scripts that updated-workflow.md §12 tells you to run.
+"""Offline checks for the scripts that docs/workflow.md §10 tells you to run.
 
 No network. These pin the arithmetic that §4.1 quotes and the HTTP-status
 classification that the existence checker relies on. Run with:
@@ -38,7 +38,7 @@ def run_kv(argv):
 
 
 class KVCacheArithmetic(unittest.TestCase):
-    """Numbers quoted in updated-workflow.md §4.1."""
+    """Numbers quoted in docs/workflow.md §4.1."""
 
     def test_qwen38_full_attention_is_exactly_64kib_per_token(self):
         per_tok = kv.kv_bytes_per_token(16, 4, 256, 2.0)

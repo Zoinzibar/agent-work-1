@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Hugging Face for the model IDs named in updated-workflow.md.
+"""Check Hugging Face for the model IDs named in docs/workflow.md.
 
 Three rules, learned the hard way:
 
@@ -36,9 +36,9 @@ MODELS = [
     ("Qwen/Qwen3.8-27B", True, "default local weight (judgment, not a ranking)"),
     ("google/gemma-4-26B-A4B-it", True, "throughput candidate"),
     ("openai/gpt-oss-20b", True, "headroom candidate"),
-    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", True, "carried fallback; existence re-read 2026-09-27, geometry still carried"),
+    ("Qwen/Qwen3-Coder-30B-A3B-Instruct", True, "tool-format fallback; existence verified, geometry unverified"),
     ("NousResearch/Hermes-4-405B", True, "weights exist; still not the planner"),
-    ("Qwen/Qwen3-Coder-32B-Instruct", False, "brief headline pick; 'missing' is the expected result (analysis M9)"),
+    ("Qwen/Qwen3-Coder-32B-Instruct", False, "known-false (docs/sources.md); 'missing' is the expected result"),
 ]
 
 # Revision SHAs as read from https://huggingface.co/api/models/<id> on 2026-09-27.
