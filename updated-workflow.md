@@ -3,23 +3,32 @@
 
 > **Lineage:** this is the workflow proposed in
 > [`initial-agent-research.md`](initial-agent-research.md), rewritten with every correction from
-> [`claim-verification-analysis.md`](claim-verification-analysis.md) applied. **This file is safe to act
-> on; the initial brief is not.** Each section cites the graded claims (`F1`–`F16`, `M1`–`M18`) and
+> [`claim-verification-analysis.md`](claim-verification-analysis.md) applied. Each section cites the graded claims (`F1`–`F16`, `M1`–`M18`) and
 > findings (analysis §3–§7) it depends on, so every step can be traced back to a verified source.
 > **Reference convention:** sections of the analysis are always cited with the prefix "analysis §N";
 > a bare `§N` refers to this file.
 
+> ## ⚠️ CRITICAL REVIEW NOTICE — 2026-09-27
+> **This file previously claimed "safe to act on" — that claim is removed in this branch.**
+> A second-order review ([`CRITICAL_REVIEW.md`](CRITICAL_REVIEW.md)) found 14 structural concerns that survive the v2 corrections:
+> - **Framework existence risk:** `hermes-agent.nousresearch.com` and `NousResearch/hermes-agent` are cited as primary sources for F1–F6, but no HTTP 200 + hash + archive is provided. If the docs domain is hallucinated, verification is circular.
+> - **Model picks still volatile / possibly hallucinated:** Qwen3.8-27B (2026-08-14) and Gemma 4 26B-A4B are sourced from SEO blogs (`kingy.ai`, `codersera.com`, `atomic.chat`), not HF `config.json`. Same failure mode that produced Qwen3-Coder 32B. See `scripts/check_model_existence.py`.
+> - **KV arithmetic hides assumptions:** DeltaNet layers assumed 0 KV for Qwen3.8-27B; Gemma 4 row is "estimated, not derived" yet used for fit verdict. See `scripts/kv_cache.py`.
+> - **Overconfidence:** "safe to act on" + no threat model for `execute_code`, MCP browser automation, or prompt injection via `web_extract`.
+> - **Vague planner tier:** "frontier-adjacent" is unfalsifiable; no concrete model + tool-call test.
+> - **Missing Arch Linux steps, cost model, license table, failure modes.**
+> **Action:** Read `CRITICAL_REVIEW.md` before acting. Run `python scripts/check_model_existence.py` and `python scripts/kv_cache.py --config <path>` first.
+
 > ## ⏳ Freshness line — read this before acting
-> Claims verified **2026-09-26**. Split by volatility, not by section number:
-> - **Durable:** the framework facts (§1, §2), the KV arithmetic and fit verdicts (§4.1, §4.3), and the
->   engine guidance (§4.4).
+> Claims verified **2026-09-26**. Second-order review **2026-09-27** downgrades safety claim.
+> Split by volatility, not by section number:
+> - **Durable:** the framework facts (§1, §2) *conditional on docs existence*, the KV arithmetic and fit verdicts (§4.1, §4.3) *conditional on geometry assumptions*, and the engine guidance (§4.4).
 > - **Volatile — assume a ~6-week half-life:** the model shortlist (§4.2), the planner pick (§5, step 2),
 >   all throughput figures, and the 160M-token data point in §3. The local tier already moved once during
->   verification (Qwen3.8-27B superseded Qwen3.6-27B on 2026-08-14).
+>   verification (Qwen3.8-27B superseded Qwen3.6-27B on 2026-08-14) and may have moved again by 2026-09-27.
 > - **In between:** the provider/memory guidance in §5 (steps 3–4) and the traceability structure of §6.
 >
-> **Run §7's checklist before downloading or subscribing to anything — it maintains exactly the volatile
-> parts.**
+> **Run §7's checklist + `CRITICAL_REVIEW.md` §Summary checklist before downloading or subscribing to anything — it maintains exactly the volatile parts.**
 
 ---
 
@@ -294,6 +303,39 @@ model attached to that architecture, the search-provider ordering, and the seque
 
 ---
 
+## 5.1 Security, cost, and operational concerns — added 2026-09-27 critical review
+
+> This section did not exist in the original corrected edition. It is added by `CRITICAL_REVIEW.md` to address overconfidence.
+
+**Security:**
+- `execute_code` is arbitrary code execution. The docs say "intermediate tool results never enter context, only print() output" but do not say it is sandboxed. Treat it as RCE: run Hermes in a container/gVisor, no host secrets mounted, network egress filtered.
+- `web_extract` ingests untrusted HTML. 15k char truncation can hide prompt injection in the tail. The footer says "how to page through" — does the agent reliably detect injection? No eval provided. Mitigation: use an extractor that strips scripts, and add an LLM guard that treats extracted content as data, not instructions.
+- MCP NotebookLM via browser automation (`notebooklm-mcp-cli`) drives a real browser. That is a credential-theft surface. The community guide's own advice "keep a non-NotebookLM fallback" is a reliability warning, not a security review.
+- Community skills (`hermes skills install official/research/searxng-search`) are unpinned code. No hash, no signature. Pin to commit SHA and audit.
+
+**Cost:**
+- Local is not free. RTX 4090 ~450W peak, ~250W avg inference, 10h/day = 2.5 kWh/day. At $0.30/kWh = $0.75/day + amortized GPU ($1600/3y ≈ $1.46/day) = ~$2.21/day baseline before any cloud spend.
+- Cloud heavy run: 500K in / 100K out at $1/$3 = $0.80/run as stated. 10 runs/day = $8/day. Hybrid is only cheaper if local tier actually offloads >70% of tokens — not measured.
+- Add a cost model: track tokens per research job (input, output, cached) and compare.
+
+**Operational failure modes:**
+| Symptom | Likely cause | Detection | Mitigation |
+| --- | --- | --- | --- |
+| OOM at 64K | KV 20 GiB + weights >24 GiB | `nvidia-smi`, managed runtime amber state | Use q8_0 KV, lower quant, or smaller model; see `scripts/kv_cache.py` |
+| 2 tok/s crawl | RAM spill (expert weights in system RAM) | `htop` shows high RAM, low GPU util | Reduce context or switch to 2×24 GB |
+| Duplicate subagent queries return identical results | Query coalescing + `~/.hermes/cache/web/` | Cache hit logs | Add jitter/nonce to queries, or disable cache for eval |
+| Agent works from head/tail excerpts | 15k char limit | Footer "page through" in output | Raise `web.extract_char_limit` or add `execute_code` summarization stage |
+| Tool calls rejected by gateway | OpenRouter page self-contradicts on tools support | 400 error "tools not supported" | Test script: `scripts/test_tools.py` (TODO) |
+
+**Arch Linux gap:**
+- Title says Arch Linux, body has zero Arch steps. Minimum appendix needed: `pacman -S nvidia nvidia-utils cuda`, driver 555+, `yay -S llama.cpp-cuda`, `python -m venv`, `vLLM` CUDA 12.6 wheel, `ollama` service override for `OLLAMA_CONTEXT_LENGTH`.
+- Rolling release risk: CUDA driver + kernel mismatch breaks `llama.cpp` server. Pin kernel or use DKMS.
+
+**Licensing:**
+- Model table needs license column with link to LICENSE. Qwen3.8 Apache 2.0 claim needs HF link; Gemma 4 has Google acceptable use policy; gpt-oss-20B has OpenAI terms. Low-refusal (RefusalBench 74.6%) does not waive legal liability for edgy research.
+
+---
+
 ## 6. Traceability — what changed, and why
 
 Every deviation from the initial brief maps to a graded claim or verified finding in the analysis:
@@ -334,7 +376,7 @@ same standard.
 
 *Every residual-uncertainty item from analysis §7 is ported below, plus two added for this file's own
 recommendations (model freshness, the auxiliary-slot version check). One analysis item is deliberately
-not carried over — stated at the bottom rather than dropped silently.*
+not carried over — stated at the bottom rather than dropped silently. **Critical review 2026-09-27 adds 5 more checks at the end.***
 
 - [ ] **Local-model freshness** — the tier moves on a ~6-week clock; confirm Qwen3.8-27B is still the
       best 24 GB pick (and whether anything newer has displaced it) before downloading.
@@ -355,6 +397,11 @@ not carried over — stated at the bottom rather than dropped silently.*
       rank ordering as soft, the generation gap as hard, and re-pull the numbers before quoting them.
 - [ ] **Qwen3.8-27B KV basis** — §4.1's row blends computed geometry with a measured ~2.3 GB per 32K;
       the two methods agree closely, but if you re-derive fit numbers, note they are different methods.
+- [ ] **CRITICAL REVIEW — Framework existence** — `curl -I https://hermes-agent.nousresearch.com/docs/llms.txt` and `gh repo view NousResearch/hermes-agent`. If 404/DNS fail, stop — F1-F6 are circular.
+- [ ] **CRITICAL REVIEW — Model existence** — `python scripts/check_model_existence.py` — confirm Qwen3.8-27B and Gemma 4 26B-A4B return 200 on HF API. If missing, treat as candidate not confirmed.
+- [ ] **CRITICAL REVIEW — KV arithmetic** — `python scripts/kv_cache.py --layers 16 --kv-heads 4 --head-dim 256 --ctx 65536` and compare to §4.1. Note DeltaNet assumption.
+- [ ] **CRITICAL REVIEW — Security** — audit `execute_code` sandbox, MCP browser automation credentials, community skill commit SHAs, and web_extract prompt-injection guard.
+- [ ] **CRITICAL REVIEW — Cost** — measure local power + amortized GPU vs API cost for your daily research volume; do not assume hybrid is cheaper.
 
 *Deliberately not carried over from analysis §7: the minor Hermes 4.3 date discrepancy (GGUF repo commit
 dates ≈ Nov 2025 vs the Nous blog's December 2025) — the blog date is treated as authoritative, and no
@@ -364,5 +411,4 @@ action in this file depends on it.*
 
 *Provenance: derived from `initial-agent-research.md` (the workflow structure and all claims that
 verified) and `claim-verification-analysis.md` v2 (every correction, qualification and new finding;
-sources with URLs and access dates live there in analysis §8). This file contains no claims that diverge from
-those two documents.*
+sources with URLs and access dates live there in analysis §8). **Additions in this branch** (§5.1, critical review banner, scripts) are new concerns from `CRITICAL_REVIEW.md` (2026-09-27) and diverge intentionally — they do not claim to be verified against primary sources, but to require verification before acting.*
