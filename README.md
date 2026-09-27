@@ -14,7 +14,7 @@
 **Scorecard:** 33 scored claims → **17 verified as stated**, **13 verified with material qualification**,
 **3 incorrect** (plus 1 advisory row, not scored).
 
-**The errors are all in model selection:**
+**The three errors — two model picks and one provider conflation:**
 1. "Qwen3-Coder 32B Instruct" — the brief's headline local pick — **does not exist**, and its 71.4%
    SWE-bench figure belongs to another model.
 2. The Llama 3.3 70B IQ2_XXS fallback **cannot hold a 64K KV cache**: 20 GiB of cache alone, on top of

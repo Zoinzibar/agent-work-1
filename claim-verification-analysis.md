@@ -52,7 +52,7 @@ are labelled as such.
 | ❌ Incorrect | 3 | 9% |
 | — Advisory, not scored | 1 | — |
 
-**Of the claims that are wrong, all three are in model selection.** The framework half of the brief (F1–F16)
+**Of the claims that are wrong, two of three are in model selection.** The framework half of the brief (F1–F16)
 is in excellent shape: 11 of 16 verified as stated, 4 with qualification, 1 wrong. The errors that matter
 are two load-bearing model picks — a local model that does not exist and a fallback that cannot hold a 64K
 KV cache — plus one provider conflation. The brief's conclusion (hybrid local + cloud) survives; the
