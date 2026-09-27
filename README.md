@@ -31,5 +31,6 @@ survives, and the local model picks are corrected in §5 — now headlined by **
 superseded the originally recommended Qwen3.6-27B six weeks before this verification ran.
 
 > ⏳ **Model claims verified 2026-09-26.** The local-model tier changed twice during authoring and review.
-> Re-check §5 and §6 before downloading anything; the framework and KV-cache sections are far more durable
-> than the model picks.
+> Before downloading anything, run the re-check checklist in [`updated-workflow.md`](updated-workflow.md) §7
+> — it consolidates the analysis's maintenance points (its §5/§6) for the file readers actually follow.
+> The framework and KV-cache sections are far more durable than the model picks.
