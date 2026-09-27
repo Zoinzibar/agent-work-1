@@ -25,7 +25,7 @@ here:
 | Layer | Initial brief said | This workflow says |
 | --- | --- | --- |
 | Local model (extraction, tool calls, subagent legs) | "Qwen3-Coder 32B Q4_K_M" †2 | **❌ does not exist** (analysis M9) → **Qwen3.8-27B Q4_K_M**; Gemma 4 26B-A4B when throughput matters most |
-| "Bigger" local fallback | Llama 3.3 70B IQ2_XXS †3 | **❌ removed entirely** — 20 GiB of KV cache at the mandatory 64K window is fatal on 24 GB at any quantisation (M14). There is no 70B-class path on one 24 GB card |
+| "Bigger" local fallback | Llama 3.3 70B IQ2_XXS †3 | **❌ removed entirely** — 20 GiB of KV cache at the mandatory 64K window plus ~21–23 GB of weights cannot fit in 24 GB of VRAM **fully on-GPU**, at any quantisation (M14). RAM spill can technically run it, slowly (§4.4), but there is no *usable* 70B-class path on one 24 GB card |
 | Cloud "planner brain" | Hermes 4 405B via OpenRouter †5 | **❌ weak agentic panel** (§3.4) → a **current (2026) frontier/frontier-adjacent model with verified tool calling** |
 | Zero-setup web search | Keyless ring as the default plan | **⚠️ repositioned** — the ring is a documented last-resort rescue path; run a keyed provider (or self-hosted SearXNG + keyed extractor) and let the ring be automatic failover (F5, §4) |
 | "Parallel/xAI routing" †1 | One backend routing via Grok | **❌ conflation** — Parallel and xAI are separate; xAI results are LLM-generated, so never cite them blind (F8) |
@@ -134,8 +134,11 @@ composable capability set — plus a community `deep-research` skill on the Skil
 
 ### 4.1 The arithmetic that drives everything [§3.2, verified]
 
-The brief treated 64K context as a soft tax on VRAM headroom. **It is the dominant term** — the KV cache,
-not the weights, is what the floor really costs:
+The brief treated 64K context as a soft tax on VRAM headroom. More precisely, the KV cache is **the
+term that invalidates the larger-model fallback tier**: for the 36B and 70B options it exceeds what can
+fit alongside the weights on one 24 GB card at any usable speed. It is *not* dominant for every model —
+for the recommended Qwen3.8-27B, ~4 GiB of KV sits against ~17–17.8 GB of weights; that small cache
+(hybrid attention, 16 full-attention layers) is exactly why it fits where the larger models do not:
 
 ```
 KV bytes/token = 2 (K+V) × layers × kv_heads × head_dim × bytes_per_element   [2 B at fp16]
@@ -166,17 +169,22 @@ KV bytes/token = 2 (K+V) × layers × kv_heads × head_dim × bytes_per_element 
   active parameters on a 24 GB card — was sound; the name and the score were the problem. Likewise, a
   rumoured "Qwen3-Coder-Next 30B Flash" at ~18 GB is **unconfirmed by any primary source — do not plan
   around it.** [§3.1]
-- **Llama 3.3 70B at any quantisation** — 20 GiB of KV cache at the mandatory 64K window on top of
-  ~21–23 GB of weights cannot fit a 24 GB card. The IQ2_XXS "usable fallback" is deleted, not amended.
-  [M14 ❌]
+- **Llama 3.3 70B as an on-GPU path, at any weight quantisation** — 20 GiB of KV cache at the mandatory
+  64K window (the attention cache is the one thing the runtime never spills) plus ~21–23 GB of weights
+  cannot fit in 24 GB of VRAM. Scope note: this is a *fully on-GPU / practical-performance at 64K*
+  verdict. The managed runtime **does** support spilling overflow weights to system RAM (§4.4), so a
+  single-4090 *host* can technically run it — with most weights in RAM, at RAM-bound speed. That is a
+  crawl, not a usable fallback, so the IQ2_XXS recommendation stays deleted rather than amended. [M14 ❌]
 - **Hermes 4.3 36B on one card** — its benchmark numbers are real (MATH-500 93.8, MMLU 87.7, BBH 86.4,
   AIME 24 71.9, GPQA-Diamond 65.5 [M6 ✅]) and the brief's "does not fit a single 4090 at good quality"
   verdict was **correct**: 21.8 GB Q4_K_M weights + 16 GiB KV at 64K ≈ **~39 GB**. It needs 2×24 GB or an
-  80 GB card (Q8_0 = 38.4 GB fits an A100 with KV). [M4/M5 ✅] Two framing fixes: "nearly matches the 70B
-  at half the VRAM" breaks *precisely at the 64K window you need* [M3 ⚠️], and the RefusalBench headline
-  mixed modes — like-for-like it is **74.60 (non-reasoning 4.3) vs 49.07 (non-reasoning 70B)**, not
-  74.6 vs 59.5 [M7 ⚠️]. Keep a Hermes model available as a low-refusal *policy escape hatch* for
-  sensitive research topics — not as the reasoning engine.
+  80 GB card (Q8_0 = 38.4 GB fits an A100 with KV). *On-GPU at 64K*, that is: Q3_K_M plus a heavily
+  quantised KV cache lands ~22 GB on one card (technically loadable, quality-degraded, zero headroom),
+  and RAM spill would merely run it slowly — neither changes the recommendation. [M4/M5 ✅] Two framing
+  fixes: "nearly matches the 70B at half the VRAM" breaks *precisely at the 64K window you need* [M3 ⚠️],
+  and the RefusalBench headline mixed modes — like-for-like it is **74.60 (non-reasoning 4.3) vs 49.07
+  (non-reasoning 70B)**, not 74.6 vs 59.5 [M7 ⚠️]. Keep a Hermes model available as a low-refusal
+  *policy escape hatch* for sensitive research topics — not as the reasoning engine.
 - **Hermes 4 405B as the planner** — see §5, step 2.
 - **"Claude Opus leads on raw frontier benchmarks"** → softened to "at or near the frontier"; the
   ordering is index- and effort-dependent and shifts weekly. Treat the *generation gap* as hard, the
@@ -263,7 +271,7 @@ Every deviation from the initial brief maps to a graded claim or verified findin
 | NotebookLM as a Hermes capability | F13 ⚠️ | Labelled third-party browser-automation MCP with fallback advice (§3) |
 | Default subagent fan-out | F11 ✅ + §7 | Docs 3-vs-10 contradiction flagged; check `delegation.max_concurrent_children` (§3) |
 | †2 "Qwen3-Coder 32B Instruct … 71.4% SWE-bench" | M9 ❌ | **Deleted** — model does not exist; real 30B-A3B = 50.3–51.6%; replaced as headline by Qwen3.8-27B (§4.2, §4.3) |
-| †3 Llama 3.3 70B IQ2_XXS "usable" fallback | M14 ❌ | **Deleted** — 20 GiB KV at 64K is fatal (§4.1, §4.3) |
+| †3 Llama 3.3 70B IQ2_XXS "usable" fallback | M14 ❌ | **Deleted** — 20 GiB KV + ~21–23 GB weights cannot fit fully on-GPU at 64K, at any weight quantisation; RAM-offload crawl acknowledged but not a usable fallback (§4.1, §4.3) |
 | †4 "nearly matches the 70B at half the VRAM" | M3 ⚠️ | Qualified — breaks exactly at the 64K window (§4.3) |
 | RefusalBench 74.6% vs 59.5% | M7 ⚠️ | Like-for-like restated: 74.60 vs 49.07 (both non-reasoning) (§4.3) |
 | Hermes 4.3 36B fit verdict | M4/M5 ✅ | **Kept and quantified**: ~39 GB at 64K; 2×24 GB or 80 GB card (§4.3) |
