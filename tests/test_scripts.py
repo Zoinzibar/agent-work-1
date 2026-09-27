@@ -113,6 +113,27 @@ class KVCacheFromConfig(unittest.TestCase):
         self.assertIn("at 65536 tokens: 4294967296 bytes = 4.0000 GiB", text)
         self.assertIn("combined: 158859264 bytes", text)
 
+    def test_all_linear_config_has_zero_growing_cache(self):
+        # Review of PR #8: zero full_attention layers used to fall back to num_hidden_layers,
+        # counting every linear layer in the growing cache AND in the fixed state.
+        import json
+        import tempfile
+        cfg = json.loads((FIXTURES / "qwen3.8-27b-config.json").read_text())
+        text = cfg["text_config"]
+        text["layer_types"] = ["linear_attention"] * 4
+        text["num_hidden_layers"] = 4
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(cfg, f)
+        try:
+            rc, out = run_kv(["--config", f.name])
+        finally:
+            pathlib.Path(f.name).unlink()
+        self.assertEqual(rc, 0)
+        self.assertIn("counts only the 0 full_attention layers", out)
+        self.assertIn("growing KV cache is 0 bytes", out)
+        self.assertNotIn("bytes/token", out)
+        self.assertIn("assumed recurrent: 4 layers", out)
+
     def test_full_attn_only_override_still_wins(self):
         rc, text = run_kv(["--config", str(FIXTURES / "qwen3.8-27b-config.json"), "--full-attn-only", "8"])
         self.assertEqual(rc, 0)
@@ -231,6 +252,16 @@ class ToolCallDetection(unittest.TestCase):
 
     def test_gemini_function_call(self):
         body = {"candidates": [{"content": {"parts": [{"functionCall": {"name": "add", "args": {"a": 2, "b": 3}}}]}}]}
+        self.assertEqual(test_tools.find_tool_call("gemini", body), (True, True))
+
+    def test_string_or_bool_arguments_are_not_fidelity(self):
+        for args in ({"a": "2", "b": "3"}, {"a": True, "b": 3}):
+            with self.subTest(args=args):
+                body = {"content": [{"type": "tool_use", "name": "add", "input": args}]}
+                self.assertEqual(test_tools.find_tool_call("anthropic", body), (True, False))
+
+    def test_gemini_double_encoded_integers_pass(self):
+        body = {"candidates": [{"content": {"parts": [{"functionCall": {"name": "add", "args": {"a": 2.0, "b": 3.0}}}]}}]}
         self.assertEqual(test_tools.find_tool_call("gemini", body), (True, True))
 
     def test_other_tool_name_is_not_add(self):

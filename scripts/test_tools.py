@@ -90,7 +90,12 @@ def gemini_request(model, base_url):
 
 
 def _args_ok(args):
-    """True if the tool arguments are a=2, b=3 (dict or JSON string)."""
+    """True if the tool arguments are a=2, b=3 (dict or JSON string).
+
+    Numbers must be JSON numbers equal to 2 and 3; 2.0 is accepted because some
+    providers (Gemini's protobuf Struct) serialise integers as doubles. Strings
+    ("2") and booleans are argument-fidelity failures, not passes.
+    """
     if isinstance(args, str):
         try:
             args = json.loads(args)
@@ -98,10 +103,10 @@ def _args_ok(args):
             return False
     if not isinstance(args, dict):
         return False
-    try:
-        return int(args.get("a")) == 2 and int(args.get("b")) == 3
-    except (TypeError, ValueError):
-        return False
+    def num_is(v, want):
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and v == want
+
+    return num_is(args.get("a"), 2) and num_is(args.get("b"), 3)
 
 
 def find_tool_call(provider, parsed):

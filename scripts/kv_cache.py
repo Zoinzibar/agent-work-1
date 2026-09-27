@@ -282,17 +282,23 @@ def main(argv=None):
         if counts:
             print(f"layer_types: {dict(counts)}")
             if counts.get("sliding_attention"):
-                print("Sliding-window layers present. This path cannot model window caps or")
-                print("separate global geometry; use --preset gemma4-26b-a4b or treat this as an upper bound.")
-            if counts.get("full_attention") and not args.full_attn_only:
-                layers = counts["full_attention"]
+                print("Sliding-window layers present. They are left out of the growing cache, and this")
+                print("path cannot model a separate global geometry; prefer --preset gemma4-26b-a4b.")
+            if not args.full_attn_only:
+                # Count only full_attention layers, including zero: linear/sliding layers
+                # must never land in the growing cache (they are counted separately, if at all).
+                layers = counts.get("full_attention", 0)
                 print(f"Growing cache counts only the {layers} full_attention layers.")
             linear_state = linear_state_from_config(text, counts.get("linear_attention", 0))
         if args.full_attn_only:
             print(f"Using --full-attn-only={args.full_attn_only}.")
             layers = args.full_attn_only
         print()
-        total = print_standard(layers, kv_heads, head_dim, args.ctx, args.dtype, dtype_bytes)
+        if layers:
+            total = print_standard(layers, kv_heads, head_dim, args.ctx, args.dtype, dtype_bytes)
+        else:
+            total = 0
+            print("  No full_attention layers: the growing KV cache is 0 bytes at any context.")
         if linear_state:
             total += print_qwen_linear(linear_state)
         return finish(total)

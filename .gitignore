@@ -14,4 +14,3 @@ venv/
 *.safetensors
 *.warc
 *.warc.gz
-*.html
