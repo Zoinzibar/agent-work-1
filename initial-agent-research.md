@@ -8,7 +8,8 @@
 >   71.4% SWE-bench Verified figure attached to it belongs to a different model. The real 30B-A3B scores
 >   50.3–51.6%. This is the brief's headline local recommendation: **ignore it.**
 > - †3 — **The Llama 3.3 70B IQ2_XXS fallback cannot work.** Its KV cache alone costs 20 GiB at the
->   mandatory 64K window, on top of ~21–23 GB of weights: it does not fit a 24 GB card at any quantisation.
+>   mandatory 64K window, on top of ~21–23 GB of weights: it does not fit a 24 GB card fully on-GPU at
+>   any quantisation (RAM spill can technically run it, but not at usable speed).
 > - †1 — **xAI and Parallel are different providers**, and xAI's results are LLM-generated rather than
 >   index-backed — a citation-integrity problem for a research loop.
 > - †5 — The Hermes 4 405B planner recommendation rests on poor agentic numbers.
